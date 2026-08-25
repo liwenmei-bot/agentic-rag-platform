@@ -8,9 +8,10 @@ backend/venv/
 # 环境变量（含 API Key，绝对不能传到 GitHub）
 backend/.env
 
-# 向量库数据 & 上传的文档（本地测试数据，不需要进版本控制）
+# 向量库数据 & 上传的文档 & 会话数据库（本地测试数据，不需要进版本控制）
 backend/data/chroma/
 backend/data/uploads/
+backend/data/*.db
 
 # IDE
 .vscode/

@@ -87,3 +87,52 @@ def answer_question(question: str) -> dict:
         "answer": answer,
         "sources": sources,
     }
+
+
+def stream_answer(question: str):
+    """
+    流式版本：一边生成一边把文字片段 yield 出去，前端就能做打字机效果。
+
+    这是一个生成器函数（generator），配合 FastAPI 的 StreamingResponse 使用。
+    先 yield 一个特殊的 "sources" 事件把引用来源传给前端，
+    再逐字/逐词 yield 模型生成的文字。
+    """
+    hits = search(question, top_k=settings.top_k)
+
+    if not hits:
+        yield {"type": "sources", "data": []}
+        yield {"type": "content", "data": "知识库中还没有任何文档，请先上传文档再提问。"}
+        return
+
+    context_parts = []
+    for i, hit in enumerate(hits, start=1):
+        context_parts.append(f"[资料{i}] 来源：{hit['filename']}\n{hit['content']}")
+    context_text = "\n\n".join(context_parts)
+
+    user_prompt = f"""【参考资料】
+{context_text}
+
+【用户问题】
+{question}
+"""
+
+    sources = [
+        {"filename": hit["filename"], "score": round(hit["score"], 3)}
+        for hit in hits
+    ]
+    yield {"type": "sources", "data": sources}
+
+    stream = _llm_client.chat.completions.create(
+        model=settings.llm_model_name,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,
+        stream=True,  # 关键参数：让 API 边生成边返回，而不是等全部生成完再返回
+    )
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield {"type": "content", "data": delta}

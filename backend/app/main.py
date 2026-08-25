@@ -11,9 +11,10 @@ FastAPI 应用入口。
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import upload, chat
+from app.api import upload, chat, sessions
+from app.services.session_service import init_db
 
-app = FastAPI(title="My Agent Platform - Phase 1: Basic RAG")
+app = FastAPI(title="agentic-rag-platform - Phase 2: Streaming Chat + Sessions")
 
 # 开发阶段允许所有来源跨域，方便本地前端调试；正式部署时应改成具体域名白名单
 app.add_middleware(
@@ -25,6 +26,12 @@ app.add_middleware(
 
 app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(chat.router, prefix="/api", tags=["chat"])
+app.include_router(sessions.router, prefix="/api", tags=["sessions"])
+
+
+@app.on_event("startup")
+async def startup_event():
+    init_db()
 
 
 @app.get("/health")
