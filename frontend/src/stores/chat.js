@@ -85,7 +85,7 @@ export const useChatStore = defineStore('chat', {
 
     async uploadFile(file) {
       const result = await api.uploadDocument(file)
-      this.uploadedFiles.push(result.filename)
+      this.uploadedFiles.push({ filename: result.filename, tripleCount: result.triple_count || 0 })
       return result
     },
   },

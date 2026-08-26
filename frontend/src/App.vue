@@ -1,10 +1,12 @@
 <script setup>
-import { onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useChatStore } from './stores/chat'
 import Sidebar from './components/Sidebar.vue'
 import ChatWindow from './components/ChatWindow.vue'
+import GraphView from './components/GraphView.vue'
 
 const store = useChatStore()
+const activeView = ref('chat') // 'chat' | 'graph'
 
 onMounted(() => {
   store.loadSessions()
@@ -13,8 +15,9 @@ onMounted(() => {
 
 <template>
   <div class="app-shell">
-    <Sidebar />
-    <ChatWindow />
+    <Sidebar v-model:active-view="activeView" />
+    <ChatWindow v-if="activeView === 'chat'" />
+    <GraphView v-else />
   </div>
 </template>
 

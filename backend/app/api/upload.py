@@ -39,4 +39,5 @@ async def upload_document(file: UploadFile = File(...)):
         "doc_id": result["doc_id"],
         "filename": result["filename"],
         "chunk_count": result["chunk_count"],
+        "triple_count": result.get("triple_count", 0),
     }

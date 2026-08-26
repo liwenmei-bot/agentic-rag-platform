@@ -35,6 +35,12 @@ export async function uploadDocument(file) {
   return res.json()
 }
 
+export async function getGraph() {
+  const res = await fetch(`${BASE_URL}/graph`)
+  if (!res.ok) throw new Error('获取知识图谱失败')
+  return res.json()
+}
+
 /**
  * 流式问答。因为 EventSource 原生只支持 GET 请求，我们的 /chat/stream 是 POST，
  * 所以用 fetch + ReadableStream 手动解析 SSE 格式的数据流。

@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
     top_k: int = 4
 
+    # Neo4j 知识图谱
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "your_neo4j_password_here"
+
 
 # 全局单例，其他地方 from app.core.config import settings 直接用
 settings = Settings()

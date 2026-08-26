@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import { useChatStore } from '../stores/chat'
 
+const activeView = defineModel('activeView', { default: 'chat' })
+
 const store = useChatStore()
 const fileInput = ref(null)
 const isUploading = ref(false)
@@ -39,9 +41,26 @@ function formatTime(isoString) {
       <span class="brand-name">Agentic RAG</span>
     </div>
 
-    <button class="new-chat-btn" @click="store.startNewSession()">
+    <button class="new-chat-btn" @click="store.startNewSession(); activeView = 'chat'">
       <span class="plus">+</span> 新对话
     </button>
+
+    <div class="view-tabs">
+      <button
+        class="view-tab"
+        :class="{ active: activeView === 'chat' }"
+        @click="activeView = 'chat'"
+      >
+        对话
+      </button>
+      <button
+        class="view-tab"
+        :class="{ active: activeView === 'graph' }"
+        @click="activeView = 'graph'"
+      >
+        知识图谱
+      </button>
+    </div>
 
     <div class="upload-zone">
       <input
@@ -56,8 +75,9 @@ function formatTime(isoString) {
       </button>
       <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
       <ul v-if="store.uploadedFiles.length" class="uploaded-list">
-        <li v-for="(name, i) in store.uploadedFiles" :key="i" class="uploaded-item">
-          <span class="doc-icon">📄</span>{{ name }}
+        <li v-for="(file, i) in store.uploadedFiles" :key="i" class="uploaded-item">
+          <span class="doc-icon">📄</span>{{ file.filename }}
+          <span class="triple-count">+{{ file.tripleCount }} 关系</span>
         </li>
       </ul>
     </div>
@@ -142,6 +162,33 @@ function formatTime(isoString) {
   font-size: 16px;
 }
 
+.view-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--ink-800);
+  border-radius: var(--radius-md);
+}
+
+.view-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+.view-tab.active {
+  background: var(--ink-700);
+  color: var(--amber-400);
+}
+.view-tab:hover:not(.active) {
+  color: var(--text-primary);
+}
+
 .upload-zone {
   padding: var(--space-3);
   background: var(--ink-800);
@@ -194,6 +241,14 @@ function formatTime(isoString) {
 }
 .doc-icon {
   font-size: 12px;
+}
+
+.triple-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--amber-600);
+  flex-shrink: 0;
 }
 
 .session-list-label {
