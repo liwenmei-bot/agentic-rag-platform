@@ -1,0 +1,48 @@
+name: CI
+
+# 每次 push 或提 PR 到 main 分支时自动跑一遍基础检查：
+# 后端代码语法是否正确、前端项目能否成功构建。
+# 这不是完整的测试覆盖，而是"代码能不能跑起来"这一层最基础的保障，
+# 但对个人项目来说已经能防止"提交了明显跑不起来的代码"这种低级失误。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Check Python syntax
+        working-directory: backend
+        run: python -m py_compile $(find app -name "*.py")
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build

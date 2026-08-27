@@ -17,6 +17,19 @@
 3. 上传文档时，系统还会自动**抽取实体关系**，构建可视化的知识图谱；问答时结合图谱关系做更深层的关联推理
 4. 切换到 **Agent 模式**，模型能自主判断是否需要检索知识库、联网搜索、或生成一份可下载的报告文件，并自主执行
 
+## 功能演示
+
+<!-- 把测试时的截图放进 docs/screenshots/ 目录，然后取消下面的注释替换成真实图片 -->
+<!--
+| 知识库问答 | 知识图谱可视化 |
+|---|---|
+| ![chat](./docs/screenshots/chat.png) | ![graph](./docs/screenshots/graph.png) |
+
+| Agent 工具调用 | Docker 一键部署 |
+|---|---|
+| ![agent](./docs/screenshots/agent.png) | ![docker](./docs/screenshots/docker.png) |
+-->
+
 ## 技术栈
 
 | 层 | 技术选型 |
