@@ -1,22 +1,17 @@
-# agentic-rag-platform
+# Backend
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Status](https://img.shields.io/badge/Status-Phase%201%20Complete-brightgreen.svg)
+FastAPI 后端，包含 RAG 检索、知识图谱、Agent 工具调用的全部核心逻辑。
 
-一个融合 RAG 检索、知识图谱与 Agent 工具调用的智能知识平台（开发中）。
-参考 [xerrors/Yuxi](https://github.com/xerrors/Yuxi) 等开源项目的架构思路，独立设计并实现。
-
-技术栈：FastAPI · Chroma · sentence-transformers · DeepSeek API（后续阶段将加入 Vue 3 前端、Neo4j 知识图谱、Agent 工具调用）
+> 项目整体介绍、技术栈、Docker 一键部署方式见根目录的 [`README.md`](../README.md)。
+> 这份文档是**本地开发模式**的指南——如果你只是想直接体验这个项目，用根目录 README 里的 `docker compose up` 更省事；如果你想修改代码、逐步调试，才需要看下面这些步骤。
 
 ## 开发进度
 
 - [x] **第一阶段**：基础 RAG 问答（文档解析 → 切块 → 向量检索 → 带引用回答）
-- [ ] 第二阶段：Vue 3 对话式前端 + 流式输出
-- [ ] 第三阶段：知识图谱融合（Neo4j + 图谱增强检索）
-- [ ] 第四阶段：Agent 工具调用（联网搜索、代码执行、文件生成）
-- [ ] 第五阶段：Docker 一键部署
+- [x] **第二阶段**：流式对话 + 会话管理（配合 frontend）
+- [x] **第三阶段**：知识图谱融合（Neo4j + 图谱增强检索）
+- [x] **第四阶段**：Agent 工具调用（知识库检索、联网搜索、生成报告）
+- [x] **第五阶段**：Docker 部署支持（本文档描述本地开发方式，Docker 方式见根目录 README）
 
 ## 第一阶段：基础 RAG 问答后端
 
@@ -117,6 +112,8 @@ curl -X POST "http://localhost:8000/api/chat" \
 - `GET /api/graph`：返回整个图谱的节点和关系数据，供前端可视化
 
 ### 需要额外启动的服务：Neo4j
+
+（这一节只适用于本地开发模式；如果用根目录的 `docker compose up`，Neo4j 会自动启动、自动配置好连接，不需要手动做下面这些步骤。）
 
 需要先用 Docker 跑起来一个 Neo4j 实例：
 
