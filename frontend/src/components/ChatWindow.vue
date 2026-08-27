@@ -37,11 +37,36 @@ function handleKeydown(e) {
 
 <template>
   <div class="chat-window">
+    <div class="mode-bar">
+      <button
+        class="mode-btn"
+        :class="{ active: !store.agentMode }"
+        @click="store.agentMode = false"
+      >
+        知识库问答
+      </button>
+      <button
+        class="mode-btn"
+        :class="{ active: store.agentMode }"
+        @click="store.agentMode = true"
+      >
+        Agent 模式
+      </button>
+    </div>
+
     <div ref="scrollContainer" class="message-scroll">
       <div v-if="store.messages.length === 0" class="empty-state">
         <p class="empty-mark">§</p>
-        <p class="empty-title">知识库空空如也，从提问开始</p>
-        <p class="empty-hint">先在左侧上传一份文档，再向它提问——回答会标注引用出处。</p>
+        <p class="empty-title">
+          {{ store.agentMode ? 'Agent 会自主判断该用什么工具' : '知识库空空如也，从提问开始' }}
+        </p>
+        <p class="empty-hint">
+          {{
+            store.agentMode
+              ? '试试问一个需要检索、搜索或生成报告的问题，观察它的执行过程。'
+              : '先在左侧上传一份文档，再向它提问——回答会标注引用出处。'
+          }}
+        </p>
       </div>
 
       <div v-else class="message-list">
@@ -51,6 +76,8 @@ function handleKeydown(e) {
           :role="msg.role"
           :content="msg.content"
           :sources="msg.sources"
+          :tool-steps="msg.toolSteps"
+          :files="msg.files"
           :is-streaming="store.isStreaming && i === store.messages.length - 1 && msg.role === 'assistant'"
         />
       </div>
@@ -60,7 +87,7 @@ function handleKeydown(e) {
       <textarea
         v-model="input"
         class="input-box"
-        placeholder="向知识库提问…（Enter 发送，Shift+Enter 换行）"
+        :placeholder="store.agentMode ? '让 Agent 帮你检索、搜索或生成报告…（Enter 发送）' : '向知识库提问…（Enter 发送，Shift+Enter 换行）'"
         rows="1"
         @keydown="handleKeydown"
       />
@@ -82,6 +109,32 @@ function handleKeydown(e) {
   flex-direction: column;
   background: var(--paper-50);
   min-width: 0;
+}
+
+.mode-bar {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6) 0;
+  max-width: 760px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.mode-btn {
+  background: transparent;
+  border: 1px solid rgba(42, 38, 32, 0.15);
+  color: var(--paper-ink);
+  border-radius: 999px;
+  padding: 6px var(--space-4);
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.6;
+}
+.mode-btn.active {
+  background: var(--amber-500);
+  border-color: var(--amber-500);
+  color: var(--ink-950);
+  opacity: 1;
 }
 
 .message-scroll {
@@ -120,6 +173,7 @@ function handleKeydown(e) {
   font-size: 13px;
   color: var(--text-faint);
   margin: 0;
+  max-width: 360px;
 }
 
 .input-bar {

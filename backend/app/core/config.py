@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = "your_neo4j_password_here"
 
+    # Agent 工具：联网搜索（可选，不配置时该工具会返回提示而不是报错）
+    serper_api_key: str = "your_serper_api_key_here"
+
 
 # 全局单例，其他地方 from app.core.config import settings 直接用
 settings = Settings()

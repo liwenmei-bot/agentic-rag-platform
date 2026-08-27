@@ -42,6 +42,46 @@ export async function getGraph() {
 }
 
 /**
+ * Agent 模式的流式对话，事件类型比普通 chat 多：tool_call / tool_result / file / content / done
+ */
+export async function streamAgentChat(sessionId, question, onEvent) {
+  const res = await fetch(`${BASE_URL}/agent/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, question }),
+  })
+
+  if (!res.ok || !res.body) {
+    throw new Error('Agent 请求失败')
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const parts = buffer.split('\n\n')
+    buffer = parts.pop()
+
+    for (const part of parts) {
+      const line = part.trim()
+      if (!line.startsWith('data:')) continue
+      const jsonStr = line.slice(5).trim()
+      try {
+        const event = JSON.parse(jsonStr)
+        onEvent(event)
+      } catch (e) {
+        console.error('解析 SSE 数据失败', e, jsonStr)
+      }
+    }
+  }
+}
+
+/**
  * 流式问答。因为 EventSource 原生只支持 GET 请求，我们的 /chat/stream 是 POST，
  * 所以用 fetch + ReadableStream 手动解析 SSE 格式的数据流。
  *

@@ -8,6 +8,7 @@ export const useChatStore = defineStore('chat', {
     messages: [],       // 当前会话的消息列表
     isStreaming: false,
     uploadedFiles: [],  // 本次会话里上传过的文件名，用于侧边栏展示
+    agentMode: false,   // false = 普通知识库问答，true = Agent 工具调用模式
   }),
 
   actions: {
@@ -31,11 +32,26 @@ export const useChatStore = defineStore('chat', {
     async switchSession(sessionId) {
       this.currentSessionId = sessionId
       const rawMessages = await api.getSessionMessages(sessionId)
-      this.messages = rawMessages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        sources: m.sources ? JSON.parse(m.sources) : [],
-      }))
+      this.messages = rawMessages.map((m) => {
+        let sources = []
+        let files = []
+        if (m.sources) {
+          try {
+            const parsed = JSON.parse(m.sources)
+            if (Array.isArray(parsed)) {
+              sources = parsed
+            } else if (parsed && parsed.files) {
+              files = parsed.files.map((f) => ({
+                filename: f.filename,
+                downloadUrl: `/files/${sessionId}/${f.filename}`,
+              }))
+            }
+          } catch (e) {
+            // 忽略解析失败，保持空数组
+          }
+        }
+        return { role: m.role, content: m.content, sources, files, toolSteps: [] }
+      })
     },
 
     async removeSession(sessionId) {
@@ -56,19 +72,44 @@ export const useChatStore = defineStore('chat', {
       if (!question.trim() || this.isStreaming) return
       if (!this.currentSessionId) await this.startNewSession()
 
-      this.messages.push({ role: 'user', content: question, sources: [] })
-      const assistantMessage = { role: 'assistant', content: '', sources: [] }
+      this.messages.push({ role: 'user', content: question, sources: [], files: [], toolSteps: [] })
+      const assistantMessage = { role: 'assistant', content: '', sources: [], files: [], toolSteps: [] }
       this.messages.push(assistantMessage)
 
       this.isStreaming = true
       try {
-        await api.streamChat(this.currentSessionId, question, (event) => {
-          if (event.type === 'sources') {
-            assistantMessage.sources = event.data
-          } else if (event.type === 'content') {
-            assistantMessage.content += event.data
-          }
-        })
+        if (this.agentMode) {
+          await api.streamAgentChat(this.currentSessionId, question, (event) => {
+            if (event.type === 'tool_call') {
+              assistantMessage.toolSteps.push({
+                name: event.data.name,
+                status: 'calling',
+                result: '',
+              })
+            } else if (event.type === 'tool_result') {
+              const step = [...assistantMessage.toolSteps].reverse().find((s) => s.name === event.data.name && s.status === 'calling')
+              if (step) {
+                step.status = 'done'
+                step.result = event.data.result
+              }
+            } else if (event.type === 'file') {
+              assistantMessage.files.push({
+                filename: event.data.filename,
+                downloadUrl: `/files/${this.currentSessionId}/${event.data.filename}`,
+              })
+            } else if (event.type === 'content') {
+              assistantMessage.content += event.data
+            }
+          })
+        } else {
+          await api.streamChat(this.currentSessionId, question, (event) => {
+            if (event.type === 'sources') {
+              assistantMessage.sources = event.data
+            } else if (event.type === 'content') {
+              assistantMessage.content += event.data
+            }
+          })
+        }
 
         // 第一次提问后，把会话标题自动改成问题的前 20 个字，方便侧边栏识别
         const session = this.sessions.find((s) => s.id === this.currentSessionId)
