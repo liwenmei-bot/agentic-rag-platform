@@ -42,7 +42,13 @@ export async function getGraph() {
 }
 
 /**
- * Agent 模式的流式对话，事件类型比普通 chat 多：tool_call / tool_result / file / content / done
+ * Agent 模式的流式对话。
+ * 当前事件类型：
+ * - tool_call
+ * - tool_result
+ * - file
+ * - content
+ * - done
  */
 export async function streamAgentChat(sessionId, question, onEvent) {
   const res = await fetch(`${BASE_URL}/agent/chat/stream`, {
@@ -65,27 +71,34 @@ export async function streamAgentChat(sessionId, question, onEvent) {
 
     buffer += decoder.decode(value, { stream: true })
     const parts = buffer.split('\n\n')
-    buffer = parts.pop()
+    buffer = parts.pop() || ''
 
     for (const part of parts) {
       const line = part.trim()
       if (!line.startsWith('data:')) continue
+
       const jsonStr = line.slice(5).trim()
       try {
         const event = JSON.parse(jsonStr)
         onEvent(event)
       } catch (e) {
-        console.error('解析 SSE 数据失败', e, jsonStr)
+        console.error('解析 Agent SSE 数据失败', e, jsonStr)
       }
     }
   }
 }
 
 /**
- * 流式问答。因为 EventSource 原生只支持 GET 请求，我们的 /chat/stream 是 POST，
- * 所以用 fetch + ReadableStream 手动解析 SSE 格式的数据流。
+ * 普通知识库模式的流式问答。
  *
- * onEvent 会在每次收到一个 SSE 事件时被调用，参数是 { type, data }。
+ * 后端 /chat/stream 当前会返回：
+ * - retrieval_info：Agent Router / Context Judge / Query Rewrite 的检索决策
+ * - sources：引用来源
+ * - content：流式回答正文
+ * - done：本轮结束
+ *
+ * EventSource 原生只支持 GET，而这里是 POST，
+ * 因此继续使用 fetch + ReadableStream 手动解析 SSE。
  */
 export async function streamChat(sessionId, question, onEvent) {
   const res = await fetch(`${BASE_URL}/chat/stream`, {
@@ -108,20 +121,20 @@ export async function streamChat(sessionId, question, onEvent) {
 
     buffer += decoder.decode(value, { stream: true })
 
-    // SSE 协议里每条消息以 \n\n 分隔，一次网络包里可能包含多条或半条消息，
-    // 所以要按分隔符切分，并把切剩的不完整部分留到 buffer 里等下一次拼接
+    // SSE 每条事件由空行分隔；一次网络包可能包含多条或半条消息。
     const parts = buffer.split('\n\n')
-    buffer = parts.pop()
+    buffer = parts.pop() || ''
 
     for (const part of parts) {
       const line = part.trim()
       if (!line.startsWith('data:')) continue
+
       const jsonStr = line.slice(5).trim()
       try {
         const event = JSON.parse(jsonStr)
         onEvent(event)
       } catch (e) {
-        console.error('解析 SSE 数据失败', e, jsonStr)
+        console.error('解析 Chat SSE 数据失败', e, jsonStr)
       }
     }
   }

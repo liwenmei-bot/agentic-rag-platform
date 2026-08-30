@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Agent 工具：联网搜索（可选，不配置时该工具会返回提示而不是报错）
     serper_api_key: str = "your_serper_api_key_here"
 
+    # 检索增强路由：判断检索结果是否"足够"的分数阈值（0-1），低于这个值触发查询改写重试
+    retrieval_sufficiency_threshold: float = 0.35
+
 
 # 全局单例，其他地方 from app.core.config import settings 直接用
 settings = Settings()

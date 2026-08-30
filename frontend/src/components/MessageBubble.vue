@@ -1,5 +1,9 @@
 <script setup>
-defineProps({
+import { computed } from 'vue'
+import DOMPurify from 'dompurify'
+import MarkdownIt from 'markdown-it'
+
+const props = defineProps({
   role: { type: String, required: true },       // 'user' | 'assistant'
   content: { type: String, required: true },
   sources: { type: Array, default: () => [] },
@@ -14,9 +18,26 @@ const TOOL_LABELS = {
   generate_report: '生成报告',
 }
 
+const markdown = new MarkdownIt({
+  html: false,       // 不允许模型直接注入原始 HTML
+  linkify: true,
+  typographer: false,
+  breaks: true,      // 单换行也按换行展示，更符合聊天体验
+})
+
 function toolLabel(name) {
   return TOOL_LABELS[name] || name
 }
+
+const renderedContent = computed(() => {
+  if (props.role !== 'assistant') return ''
+
+  const html = markdown.render(props.content || '')
+
+  // markdown-it 已禁用原始 HTML；DOMPurify 再做一层兜底，
+  // 避免以后配置变化或链接内容带来 XSS 风险。
+  return DOMPurify.sanitize(html)
+})
 </script>
 
 <template>
@@ -34,7 +55,15 @@ function toolLabel(name) {
         </div>
       </div>
 
-      <p class="content">{{ content }}<span v-if="isStreaming" class="cursor">▍</span></p>
+      <!--
+        用户消息保持纯文本；AI 回答使用安全 Markdown 渲染。
+        这样 **粗体**、列表、代码、小标题等不会再把 Markdown 符号直接显示出来。
+      -->
+      <div v-if="role === 'assistant'" class="content-wrap">
+        <div class="content markdown-content" v-html="renderedContent"></div>
+        <span v-if="isStreaming" class="cursor">▍</span>
+      </div>
+      <p v-else class="content">{{ content }}<span v-if="isStreaming" class="cursor">▍</span></p>
 
       <!-- Agent 生成的可下载文件 -->
       <div v-if="files.length" class="files">
@@ -112,8 +141,140 @@ function toolLabel(name) {
   margin: 0;
   font-size: 15px;
   line-height: 1.7;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.content-wrap {
+  min-width: 0;
+}
+
+.bubble.user .content {
+  white-space: pre-wrap;
+}
+
+/*
+ * v-html 生成的节点不会自动带 scoped 属性，
+ * 因此 Markdown 内部元素必须使用 :deep(...) 设置样式。
+ */
+.markdown-content {
+  white-space: normal;
+}
+
+.markdown-content :deep(p) {
+  margin: 0 0 0.75em;
+}
+
+.markdown-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-content :deep(strong) {
+  font-weight: 700;
+  color: inherit;
+}
+
+.markdown-content :deep(em) {
+  font-style: italic;
+}
+
+.markdown-content :deep(h1),
+.markdown-content :deep(h2),
+.markdown-content :deep(h3),
+.markdown-content :deep(h4) {
+  margin: 1em 0 0.5em;
+  line-height: 1.35;
+  color: inherit;
+}
+
+.markdown-content :deep(h1) {
+  font-size: 1.35em;
+}
+
+.markdown-content :deep(h2) {
+  font-size: 1.22em;
+}
+
+.markdown-content :deep(h3) {
+  font-size: 1.12em;
+}
+
+.markdown-content :deep(h4) {
+  font-size: 1.04em;
+}
+
+.markdown-content :deep(ul),
+.markdown-content :deep(ol) {
+  margin: 0.55em 0 0.85em;
+  padding-left: 1.55em;
+}
+
+.markdown-content :deep(li) {
+  margin: 0.25em 0;
+}
+
+.markdown-content :deep(li > p) {
+  margin: 0;
+}
+
+.markdown-content :deep(code) {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.markdown-content :deep(pre) {
+  margin: 0.8em 0;
+  padding: 0.85em 1em;
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  background: rgba(18, 25, 38, 0.08);
+}
+
+.markdown-content :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.markdown-content :deep(blockquote) {
+  margin: 0.75em 0;
+  padding-left: 0.9em;
+  border-left: 3px solid var(--amber-500);
+  color: var(--text-faint);
+}
+
+.markdown-content :deep(a) {
+  color: var(--amber-600);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-content :deep(hr) {
+  margin: 1em 0;
+  border: 0;
+  border-top: 1px solid rgba(127, 127, 127, 0.25);
+}
+
+.markdown-content :deep(table) {
+  width: 100%;
+  margin: 0.8em 0;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.markdown-content :deep(th),
+.markdown-content :deep(td) {
+  padding: 0.45em 0.6em;
+  border: 1px solid rgba(127, 127, 127, 0.22);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-content :deep(th) {
+  font-weight: 700;
+  background: rgba(127, 127, 127, 0.08);
 }
 
 .cursor {

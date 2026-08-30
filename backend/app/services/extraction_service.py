@@ -1,44 +1,169 @@
 """
-三元组抽取：让 LLM 从一段文本里抽出 (主体, 关系, 客体) 结构。
+三元组抽取服务。
 
-Prompt 设计要点（路线图第三阶段提到的坑）：
-1. 要求输出严格的 JSON，方便代码直接解析，不要让模型输出多余的解释文字
-2. 给出具体的输出格式示例（few-shot），减少模型格式跑偏的概率
-3. 限制每次抽取的数量，避免模型抽得太泛（什么都往里塞，图谱会变得很乱）
-4. 明确要求实体名要"归一化"到最常见/最规范的说法，减少同一个实体因为
-   叫法不同（"苹果公司" vs "Apple"）而被存成两个节点的问题
-   （完全解决这个问题需要更复杂的实体对齐算法，这里先用 prompt 层面缓解）
+目标：
+1. 只抽取原文明确支持的事实，不补写、不推测。
+2. 实体尽量短、稳定、可复用，避免整句被当成实体。
+3. 同一 chunk 内对实体命名做保守归一化，减少 Agent/agent 等重复节点。
+4. 对 LLM 输出做代码侧校验、清洗和去重，避免脏三元组直接进入 Neo4j。
 """
+
 import json
+import re
 
 from openai import OpenAI
 
 from app.core.config import settings
 
-_llm_client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+_llm_client = OpenAI(
+    api_key=settings.llm_api_key,
+    base_url=settings.llm_base_url,
+)
 
-EXTRACTION_PROMPT = """你是一个信息抽取助手，任务是从下面的文本中抽取实体关系三元组。
 
-规则：
-1. 只抽取文本中明确表达的事实关系，不要推测或编造。
-2. 每个三元组的格式是：主体、关系、客体，都必须是简洁的名词或短语（关系一般是2-4个字的动词短语，比如"创始人"、"位于"、"属于"）。
-3. 同一个实体在整段文本里如果有不同叫法，统一使用最规范、最常见的那个名称。
-4. 最多抽取 8 条最重要的三元组，不要为了凑数抽取无意义的关系。
-5. 严格按照下面的 JSON 格式输出，不要输出任何其他文字、解释或 Markdown 代码块标记。
+EXTRACTION_PROMPT = """你是一个严格的知识图谱信息抽取器。
+请从【文本内容】中抽取少量、高质量、可复用的实体关系三元组。
+
+必须遵守：
+1. 只抽取文本中明确表达的事实关系。禁止推测、补全、常识扩写或为了建图而创造关系。
+2. 每个三元组必须包含 subject、relation、object 三个字段。
+3. subject 和 object 必须尽量是“短而稳定的实体/概念名称”，不要直接复制整句话。
+4. relation 必须是简短、明确的关系名称，优先 2~6 个字，例如：定义、包含、属于、依赖、导致、限制、执行方式、衡量单位。
+5. 同一个概念有不同大小写时统一名称。例如 Agent/agent 统一成 Agent；Neo4j/neo4j 统一成 Neo4j；RAG/rag 统一成 RAG。
+6. 不要擅自把不同概念合并。例如“Agent”“Agent 工程”“智能体”只有在原文明确表示它们是同一概念时才能统一。
+7. 如果文本明确表达“X 通过多轮执行……”，可以抽取 X -[执行方式]-> 多轮执行；如果原文没有表达，就不能生成这条关系。
+8. 如果一个定义性客体较长，应压缩成不改变原意的短概念短语；不要加入原文没有的术语。
+9. 最多抽取 10 条最重要的三元组。宁可少抽，也不要抽无意义或低置信度关系。
+10. 不要输出自环关系（subject 与 object 相同）。
+11. 只输出 JSON 数组，不要输出 Markdown、解释、前后缀或其他文字。
 
 输出格式示例：
-[{"subject": "苹果公司", "relation": "创始人", "object": "史蒂夫·乔布斯"}, {"subject": "史蒂夫·乔布斯", "relation": "出生于", "object": "美国"}]
+[{"subject":"上下文窗口","relation":"衡量单位","object":"token"},{"subject":"Agent","relation":"执行方式","object":"多轮执行"}]
 
-文本内容：
+注意：上面的示例只用于说明格式，只有当下面文本真实支持这些事实时才能抽取。
+
+【文本内容】
 {text}
 
-请输出 JSON：
+【JSON 输出】
 """
 
 
+_TECH_ENTITY_CANONICAL = {
+    "agent": "Agent",
+    "neo4j": "Neo4j",
+    "rag": "RAG",
+    "llm": "LLM",
+    "api": "API",
+    "token": "token",
+}
+
+
+def _clean_text_field(value: object) -> str:
+    """清理模型输出字段中的多余空白、引号和句末标点。"""
+    if not isinstance(value, str):
+        return ""
+
+    text = re.sub(r"\s+", " ", value.strip())
+    text = text.strip('“”"\'` ')
+    text = text.rstrip("。；;，,")
+    return text.strip()
+
+
+def _normalize_entity(value: object) -> str:
+    """对实体做保守归一化，不做语义猜测。"""
+    entity = _clean_text_field(value)
+    if not entity:
+        return ""
+
+    # 英文技术词仅在“整个实体完全等于该术语”时做大小写规范化。
+    canonical = _TECH_ENTITY_CANONICAL.get(entity.casefold())
+    if canonical:
+        return canonical
+
+    # 统一中英文之间的多余空格，例如 "Agent 工程" 保持可读但不重复空白。
+    entity = re.sub(r"\s+", " ", entity)
+    return entity
+
+
+def _normalize_relation(value: object) -> str:
+    relation = _clean_text_field(value)
+    if not relation:
+        return ""
+
+    # 关系名不应该是一整句；只做长度保护，不替模型发明新关系。
+    if len(relation) > 20:
+        return ""
+    return relation
+
+
+def _extract_json_array(raw_output: str) -> list:
+    """兼容模型偶尔输出 ```json ... ``` 或前后少量文字。"""
+    cleaned = (raw_output or "").strip()
+    if not cleaned:
+        return []
+
+    cleaned = cleaned.replace("```json", "").replace("```JSON", "").replace("```", "").strip()
+
+    try:
+        data = json.loads(cleaned)
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\[.*\]", cleaned, flags=re.DOTALL)
+    if not match:
+        return []
+
+    try:
+        data = json.loads(match.group(0))
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def _sanitize_triples(items: list) -> list[dict]:
+    """字段校验 + 清洗 + 去重，防止脏数据写入 Neo4j。"""
+    results: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        subject = _normalize_entity(item.get("subject"))
+        relation = _normalize_relation(item.get("relation"))
+        obj = _normalize_entity(item.get("object"))
+
+        if not subject or not relation or not obj:
+            continue
+        if subject.casefold() == obj.casefold():
+            continue
+
+        # 防止整段句子被误当成节点。这里只做宽松上限，中文定义短语仍可保留。
+        if len(subject) > 80 or len(obj) > 100:
+            continue
+
+        key = (subject.casefold(), relation.casefold(), obj.casefold())
+        if key in seen:
+            continue
+
+        seen.add(key)
+        results.append({
+            "subject": subject,
+            "relation": relation,
+            "object": obj,
+        })
+
+        if len(results) >= 10:
+            break
+
+    return results
+
+
 def extract_triples(text: str) -> list[dict]:
-    """从一段文本抽取三元组列表，抽取失败或解析失败时返回空列表（不中断主流程）。"""
-    if not text.strip():
+    """从一段文本抽取并清洗三元组。失败时返回空列表，不中断文档入库。"""
+    if not text or not text.strip():
         return []
 
     prompt = EXTRACTION_PROMPT.replace("{text}", text)
@@ -47,22 +172,12 @@ def extract_triples(text: str) -> list[dict]:
         response = _llm_client.chat.completions.create(
             model=settings.llm_model_name,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,  # 抽取任务要稳定、可重复，温度要低
+            temperature=0.0,
         )
-        raw_output = response.choices[0].message.content.strip()
+        raw_output = response.choices[0].message.content or ""
+        items = _extract_json_array(raw_output)
+        return _sanitize_triples(items)
 
-        # 兜底处理：万一模型还是输出了 ```json 包裹的代码块，去掉包裹符号再解析
-        if raw_output.startswith("```"):
-            raw_output = raw_output.strip("`")
-            if raw_output.startswith("json"):
-                raw_output = raw_output[4:]
-
-        triples = json.loads(raw_output)
-        if not isinstance(triples, list):
-            return []
-        return triples
-
-    except (json.JSONDecodeError, Exception) as e:
-        # 抽取失败不应该导致整个文档上传流程失败，打印日志、返回空列表即可
-        print(f"三元组抽取失败: {e}")
+    except Exception as exc:
+        print(f"三元组抽取失败: {exc}")
         return []
