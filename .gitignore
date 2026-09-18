@@ -29,3 +29,26 @@ Thumbs.db
 
 # 模型下载缓存（sentence-transformers 会自动下载到用户目录，不在项目里，这条是保险）
 *.cache/
+# ==============================
+# Local development backups
+# ==============================
+
+# Upgrade packages / extracted patches
+agent_mode_fix_v1/
+agent_mode_fix_v1.zip
+agent_par_upgrade/
+agent_par_upgrade_complete.zip
+
+# Local backup directories
+backend/backup_before_mode_fix/
+backend/backup_before_par/
+
+# Historical Router snapshots
+backend/app/services/rag_service_router_v*.py
+
+# Temporary graph-service backups / patches
+backend/app/services/graph_service_before_entity_fix.py
+graph_service_entity_match_fixed.py
+
+# Local generated technical reports
+Agentic_RAG_*.docx
