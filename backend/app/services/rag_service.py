@@ -37,6 +37,11 @@ from app.core.config import settings
 from app.services import graph_service
 from app.services.extraction_service import extract_triples
 from app.services.vector_store_service import add_chunks, search
+from app.services.agent_orchestrator import (
+    build_actor_trace,
+    build_plan,
+    build_reflection,
+)
 from app.utils.chunking import chunk_text
 from app.utils.parsing import parse_document
 
@@ -106,24 +111,41 @@ DIRECT_SYSTEM_PROMPT = """你是一个简洁、友好的通用助手。
 请直接回答用户，不要伪造知识库引用，也不要声称查过文档或知识图谱。
 """
 
-ROUTER_PROMPT = """你是 Agentic RAG 的路由器。请只判断当前问题应该走哪条路线。
+BASIC_RAG_SYSTEM_PROMPT = """你是一个严谨的基础知识库问答助手。
+当前模式是 Basic RAG，只允许使用提供的【参考资料】回答。
 
-可选路线只有：
-- direct：寒暄、感谢、告别，或明显不需要知识库的简单通用对话。
-- vector：主要需要从文档中查定义、说明、段落内容、事实描述。
-- graph：主要询问两个或多个实体之间的明确关系、连接、依赖、归属。
-- hybrid：同时需要文档语义内容和实体关系，或问题较复杂，需要两类证据共同回答。
+规则：
+1. 不使用知识图谱，不调用 Agent Router，不做 Query Rewrite。
+2. 不要使用外部知识补充资料中没有提供的事实。
+3. 如果参考资料不足，明确回答“根据现有知识库资料无法回答这个问题”。
+4. 文档引用格式：
+   【来源：文件名 第N段】
+5. 回答直接、简洁、准确。
+"""
 
-判断规则：
-1. “是什么/定义/文档里讲什么”优先 vector。
-2. “A 和 B 是什么关系/如何关联”优先 graph。
-3. 明确要求“结合文档和知识图谱”“结合知识库和图谱”必须 hybrid。
-4. 不要因为问题里出现 Agent、上下文、token 等词就自动选 graph。
-5. 如果只是“你好/谢谢/再见”等，选 direct。
-6. 无法确定时，优先 vector；只有确实需要两种检索方式时才选 hybrid。
+ROUTER_PROMPT = """你是 Agentic RAG 的四路路由器。你的任务是判断：
+为了回答当前问题，系统应该使用哪一种信息来源/处理方式。
 
-只输出一个 JSON 对象，不要 Markdown，不要额外解释：
-{{"route":"vector","reason":"问题主要询问文档中的概念定义"}}
+可选路线：
+- direct：不需要知识库证据的“任务型请求”，例如寒暄、感谢、告别、简单翻译、简单算术、轻量创作、简单文本转换。
+- vector：主要需要文档文本证据的“知识型问题”，例如定义、事实、数值、属性、参数、原因、机制、影响、项目配置、部署信息、成本、延迟、用户数、型号等。
+- graph：主要需要实体关系证据，例如关系、联系、连接、指向、上下游、归属、关系标签、哪个节点、谁导致谁、谁决定谁。
+- hybrid：明确需要“文本证据 + 图谱关系”两类证据共同完成回答。
+
+重要原则：
+1. DIRECT 不是“通用知识问答”路线。即使你凭常识知道答案，只要用户是在询问技术/项目/知识事实，仍然应该按证据类型选择 VECTOR / GRAPH / HYBRID。
+2. “系统提示词会占用上下文窗口吗？”、“工具调用结果会不会让上下文变长？”、“长上下文会影响成本和延迟吗？”、“项目部署在哪家云服务商？”都属于知识/事实/机制/属性查询，通常走 VECTOR。
+3. 如果问题明确询问 A 与 B 的关系、联系、连接、边、上下游、归属、对应、关系类型，应优先 GRAPH。
+4. HYBRID 必须有明确的双证据需求。下列表达都表示双证据：“先查 README 再沿 Neo4j”“代码说明 + Neo4j 边”“文本事实也需要图谱边”“文档内容与关系路径两个角度”“别只看图谱也别只看文档，两边都用”。 仅仅因为问题涉及多个技术概念，或者一个关系也可以用文字解释，不足以选择 HYBRID。
+5. 如果一句话先寒暄，后面又提出知识问题，应忽略寒暄前缀，按照知识问题路由。
+6. 显式证据约束最高优先：
+   - 只看文档 / 不看图谱 -> vector
+   - 只看图谱 / 不查文档 -> graph
+   - 两边证据都要 -> hybrid
+7. 无法确定时：普通知识事实/解释 -> vector；明确实体关系 -> graph；明确双证据 -> hybrid；只有真正不需要知识证据的任务才 direct。
+
+只输出 JSON，不要 Markdown，不要额外解释：
+{{"route":"vector","reason":"用户询问知识事实，需要文档文本证据"}}
 
 用户问题：
 {question}
@@ -154,17 +176,385 @@ REWRITE_PROMPT = """你是一个“保守型”知识库检索查询优化助手
 【改写后的检索查询】
 """
 
-# 闲聊/无需检索的问题的简单特征词，命中且问题很短时直接跳过检索，节省一次检索+LLM调用。
-# 这是启发式判断（V1），更严谨的做法是用一次轻量 LLM 调用做意图分类，
-# 但对"你好""谢谢"这类高置信度场景，用规则判断延迟更低、成本更低。
-_CHITCHAT_PATTERNS = re.compile(
-    r"^(你好|您好|hi|hello|嗨|谢谢|感谢|thanks|thank you|再见|拜拜|bye)[!！。.，,\s]*$",
-    re.IGNORECASE,
+# =============================================================================
+# Router V4: explicit constraints + high-confidence direct + intent scoring
+# =============================================================================
+
+def _matches_any(patterns: tuple[str, ...], question: str) -> bool:
+    return any(re.search(pattern, question, flags=re.IGNORECASE) for pattern in patterns)
+
+
+# ----- DIRECT: only very high-confidence non-KB tasks -----
+
+_SOCIAL_ONLY_PATTERNS = (
+    r"^(?:你好|您好|你好呀|嗨|哈喽|hello|hi|早安|早呀|早上好|上午好|中午好|下午好|晚上好|晚安)[!！。.，,？?\s]*$",
+    r"^(?:(?:你好|早安|早上好|上午好|中午好|下午好|晚上好)[，, ]*)?(?:今天心情不错|最近怎么样|最近好吗|你好吗)[!！。.，,？?\s]*$",
+    r"^(?:你在吗|在吗|在不在呀|在不在)[!！。.，,？?\s]*$",
+    r"^(?:谢谢|多谢|谢啦|感谢|辛苦了|辛苦啦|好的[，, ]*谢谢|收到)(?:[，, ]*(?:今天)?(?:先到这里|先这样|回头见|晚点见|晚点聊))?[!！。.，,\s]*$",
+    r"^(?:先这样|再见|拜拜|bye|回见|回头见|晚点聊|晚点见|我先走了[，, ]*回头见)[!！。.，,\s]*$",
+    r"^(?:我(?:先)?去忙了|我先走了)(?:[，, ]*(?:之后|回头|晚点)(?:再)?聊|[，, ]*回头见)?[!！。.，,\s]*$",
+    r"^(?:哈喽|你好|嗨)[，, ]*今天就不(?:问|聊)技术问题了[!！。.，,\s]*$",
+)
+
+_SIMPLE_TRANSLATION_PATTERNS = (
+    r"^(?:请)?(?:帮我)?把.{1,120}(?:翻译成|翻成)(?:英文|英语|中文|汉语|日文|日语|韩文|韩语)[。.!！]?$",
+    r"^(?:请)?翻译[：:].{1,160}$",
+    r"^.{1,120}(?:中文|英文|英语|日文|日语|韩文|韩语)怎么说[？?。.！!]*$",
+)
+
+_SIMPLE_ARITHMETIC_PATTERN = re.compile(
+    r"^\s*[-+]?\d+(?:\.\d+)?"
+    r"(?:\s*(?:再\s*)?(?:\+|\-|\*|/|×|÷|加|减|乘以|乘|除以|除)\s*[-+]?\d+(?:\.\d+)?)+"
+    r"\s*(?:等于多少|是多少|等于几|是几|结果是多少|结果是几)?[？?。.！!]*\s*$"
+)
+
+_LIGHT_CREATIVE_PATTERNS = (
+    r"^(?:请)?(?:帮我)?(?:写|想|给我想)(?:一句|一条|一个|个)?(?:不超过.{0,10})?(?:简短的|礼貌的)?"
+    r".{0,30}(?:祝福|口号|结束语|欢迎语|开场白|问候|鼓励语?)[。.!！]?$",
+    r"^(?:请)?(?:帮我)?写一句.{0,50}(?:祝福|问候|鼓励语?|开场白|结束语|欢迎语)[。.!！]?$",
+)
+
+_SIMPLE_TEXT_TASK_PATTERNS = (
+    r"^把.{1,100}(?:改成|转换成)(?:小写|大写)[。.!！]?$",
+    r"^把.{1,120}(?:中的)?字母改成(?:小写|大写)[。.!！]?$",
+    r"^把.{1,120}(?:的)?(?:两个)?单词首字母大写[。.!！]?$",
+    r"^把.{1,120}按(?:逗号|空格|分号|顿号)(?:拆|分)成.{1,40}[。.!！]?$",
 )
 
 
 def _is_chitchat(question: str) -> bool:
-    return bool(_CHITCHAT_PATTERNS.match(question.strip())) and len(question.strip()) <= 10
+    return _matches_any(_SOCIAL_ONLY_PATTERNS, question.strip())
+
+
+def _is_direct_non_kb_task(question: str) -> bool:
+    q = question.strip()
+    return (
+        _is_chitchat(q)
+        or bool(_SIMPLE_ARITHMETIC_PATTERN.match(q))
+        or _matches_any(_SIMPLE_TRANSLATION_PATTERNS, q)
+        or _matches_any(_LIGHT_CREATIVE_PATTERNS, q)
+        or _matches_any(_SIMPLE_TEXT_TASK_PATTERNS, q)
+    )
+
+
+# ----- V5 structured evidence-source parser -----
+
+_TEXT_EVIDENCE_STRONG_PATTERNS = (
+    r"\breadme\b",
+    r"配置(?:文件|文档|说明)",
+    r"代码说明",
+    r"项目说明",
+    r"说明文档",
+    r"概念说明",
+    r"文档(?:里|中|内容|片段|说明)",
+    r"资料(?:里|中|中的|片段)?",
+    r"正文",
+    r"段落",
+    r"文字(?:材料|证据|说明|定义|来源)",
+    r"文本(?:事实|证据|说明|内容)",
+    r"知识库(?:片段|内容)?",
+    r"检索(?:到的)?(?:片段|段落)",
+)
+
+_GRAPH_EVIDENCE_PATTERNS = (
+    r"知识图谱",
+    r"图谱",
+    r"知识图",
+    r"neo4j",
+    r"关系图",
+    r"图结构",
+    r"关系网络",
+    r"图谱边",
+    r"关系边",
+    r"实体关系",
+    r"实体连接",
+    r"关系路径",
+    r"组件关系(?:网络)?",
+    r"服务依赖",
+    r"图(?:里|中|里的|中的).{0,30}(?:关系|连接|节点|路径|边|上游|下游)",
+)
+
+_DUAL_EVIDENCE_CUES = (
+    "同时", "结合", "综合", "一起", "一并", "两边", "两个角度",
+    "合起来", "合并", "联合", "放在一起", "放在同一个答案",
+    "一边", "也要", "也需要", "再用", "再从", "再沿", "再去",
+    "先从", "先查", "先用", "最后合并", "都用", "共同", "分别", "负责",
+)
+
+_DOC_ONLY_PATTERNS = (
+    r"(?<!不)(?<!别)(?<!要)(?:只|仅)(?:根据|看|查|参考|使用|用|从)?"
+    r"(?:文档|资料|知识库|正文|文字证据|文本证据|文档片段|知识库片段|readme|项目说明|配置文件|说明文档)",
+)
+
+_GRAPH_ONLY_PATTERNS = (
+    r"(?<!不)(?<!别)(?<!要)(?:只|仅)(?:根据|看|查|参考|使用|用|沿)?"
+    r"(?:知识图谱|图谱|neo4j|关系图|知识图|图谱边|关系边)",
+)
+
+_DOC_EXCLUDE_PATTERNS = (
+    r"(?:不|不要|别)(?:只)?(?:再)?(?:使用|用|查|看|参考|翻|依据)?"
+    r"(?:文档|资料|知识库|正文|readme|项目说明|说明文档)",
+)
+
+_GRAPH_EXCLUDE_PATTERNS = (
+    r"(?:不|不要|别)(?:只)?(?:再)?(?:使用|用|查|看|参考|沿)?"
+    r"(?:知识图谱|图谱|neo4j|关系图|知识图)",
+)
+
+_DOC_FACT_REQUEST_PATTERNS = (
+    r"(?:配置文件|配置文档|readme|文档|资料|项目说明|说明文档).{0,35}"
+    r"(?:有没有|是否|写|记录|说明|给出|列出|使用|采用|配置|地址|端口|框架|工具|数值)",
+    r"(?:有没有|是否).{0,35}(?:记录|写|说明|给出).{0,35}"
+    r"(?:地址|端口|url|uri|型号|配置|框架|构建工具|服务商|账单|峰值)",
+)
+
+
+def _has_text_evidence_reference(question: str) -> bool:
+    q = question.strip().lower()
+    return _matches_any(_TEXT_EVIDENCE_STRONG_PATTERNS, q)
+
+
+def _has_text_reference_broad(question: str) -> bool:
+    q = question.strip().lower()
+    return (
+        _has_text_evidence_reference(q)
+        or any(term in q for term in ("文档", "资料", "文字", "文本", "readme", "知识库", "说明"))
+    )
+
+
+def _has_graph_evidence_reference(question: str) -> bool:
+    q = question.strip().lower()
+    return _matches_any(_GRAPH_EVIDENCE_PATTERNS, q)
+
+
+def _has_dual_evidence_intent(question: str) -> bool:
+    q = question.strip().lower()
+
+    has_text = _has_text_reference_broad(q)
+    has_graph = _has_graph_evidence_reference(q)
+
+    if not (has_text and has_graph):
+        return False
+
+    if any(cue in q for cue in _DUAL_EVIDENCE_CUES):
+        return True
+
+    # Sequential two-source instructions.
+    sequential_patterns = (
+        r"(?:先|先从|先查|先用).{0,80}(?:文档|资料|readme|说明|正文|文字|文本|知识库)"
+        r".{0,100}(?:再|然后|最后|再沿|再去|再从|再用).{0,80}"
+        r"(?:知识图谱|图谱|知识图|neo4j|关系图|图结构|关系网络|关系边|关系路径)",
+        r"(?:一边).{0,80}(?:文档|资料|readme|说明|正文|文字|文本)"
+        r".{0,100}(?:一边).{0,80}(?:图谱|neo4j|关系图|关系网络|关系边)",
+        r"(?:需要).{0,60}(?:文本|文字|文档|资料).{0,80}(?:也需要|还需要).{0,60}"
+        r"(?:图谱|neo4j|关系边|图谱边)",
+    )
+    return _matches_any(sequential_patterns, q)
+
+
+def _explicit_modality_route(question: str) -> tuple[str, str] | None:
+    q = question.strip()
+    q_lower = q.lower()
+
+    # Dual evidence always wins, including "别只看 A，也别只看 B，两边都用".
+    if _has_dual_evidence_intent(q_lower):
+        return "hybrid", "V5证据源解析：用户明确要求同时使用文本证据与图谱关系。"
+
+    doc_excluded = _matches_any(_DOC_EXCLUDE_PATTERNS, q_lower)
+    graph_excluded = _matches_any(_GRAPH_EXCLUDE_PATTERNS, q_lower)
+
+    if graph_excluded and not doc_excluded:
+        return "vector", "V5证据源解析：用户排除图谱证据，使用文档检索。"
+
+    if doc_excluded and not graph_excluded:
+        return "graph", "V5证据源解析：用户排除文档证据，使用知识图谱。"
+
+    doc_only = _matches_any(_DOC_ONLY_PATTERNS, q_lower)
+    graph_only = _matches_any(_GRAPH_ONLY_PATTERNS, q_lower)
+
+    if doc_only and not graph_only:
+        return "vector", "V5证据源解析：用户明确只使用文档/资料证据。"
+
+    if graph_only and not doc_only:
+        return "graph", "V5证据源解析：用户明确只使用图谱/关系证据。"
+
+    return None
+
+
+# ----- V5 intent scoring -----
+
+_GRAPH_FEATURES: tuple[tuple[int, str], ...] = (
+    (5, r"(?:知识图谱|图谱|关系图|知识图).{0,25}(?:边|节点|关系|联系|连接|指向|对应|上游|下游|归属|包含|导致|决定|路径)"),
+    # Neo4j is a product name too, so "Neo4j 连接地址" must NOT be treated as an entity relationship.
+    (5, r"neo4j.{0,25}(?:边|节点|关系|联系|连接(?!地址|字符串|配置|端口|url|uri)|指向|对应|上游|下游|归属|包含|导致|决定|路径)"),
+    (5, r"(?:哪个|哪一个|什么)(?:节点|实体).{0,30}(?:连接|指向|对应|连|关系|上游|下游|流向)"),
+    (5, r"(?:上游|下游)(?:实体|节点|步骤)|后继节点|关系标签|关系类型|哪一种连接|哪种连接"),
+    (5, r"(?:前后怎么衔接|怎样衔接|如何衔接|怎么衔接|依赖关系|怎样的依赖|存在怎样的依赖)"),
+    (5, r"(?:流向哪个|流向哪里|经过哪些节点|触发.{0,30}|谁接收|由谁接收|交给.{0,30}(?:模块|组件)|如何汇合|怎么汇合)"),
+    (5, r"(?:位于谁之前|谁之前.{0,20}谁之后|位于.{0,20}之前.{0,20}之后|前后接哪些节点|关系路径)"),
+    (4, r"什么关系|有何关系|关系是什么|之间.*关系|什么联系|有何联系|是什么联系|之间.*联系|有什么联系"),
+    (4, r"如何关联|怎么关联|怎么连起来|如何连起来|怎么连接|如何连接|怎么挂接|如何挂接"),
+    (4, r"指向了|指向谁|谁指向|连过来|连出去|挂接|归到|上位概念|下位概念"),
+    (4, r"通过.{0,25}(?:关系|边|执行方式).{0,25}(?:连接|关联|连|指向)"),
+    (4, r"谁.{0,20}(?:导致|决定)|由.{0,30}(?:导致|决定)"),
+    (4, r"是不是一回事|是否是一回事|是不是同一个|是否相同|是否一样|同义概念"),
+    (3, r"定义关系|包含关系|衡量关系|执行方式|关系网络|实体关系|实体连接"),
+    (3, r"(?:对应|连接|关联).{0,30}(?:哪个|什么)(?:节点|实体|概念|属性|关系)"),
+)
+
+_VECTOR_FEATURES: tuple[tuple[int, str], ...] = (
+    (6, r"(?:文档|资料|知识库|正文|段落|readme|配置文件|配置文档|项目说明|代码说明|说明文档)"
+        r".{0,35}(?:有没有|是否|写|记录|提到|说明|描述|给出|查到|列出|配置|使用|采用)"),
+    (4, r"什么是|是什么概念|什么意思|定义|具体表示什么|表示的是什么|具体指"),
+    (4, r"为什么|原因|怎么解释|如何解释|有什么影响|会有什么影响"),
+    (4, r"多少|多大|多长|多久|价格|费用|人数|用户数|日活|型号|显卡配置|概率|准确率|延迟|营业收入|营收"),
+    (4, r"连接地址|连接字符串|url|uri|端口|web框架|构建工具|服务商|服务器账单|实测峰值"),
+    (3, r"文档|资料|知识库|正文|段落|文字说明|文本说明|检索片段|readme|项目说明|配置文件"),
+    (2, r"有没有|是否说明|是否记录|怎么描述|如何描述|哪几类|哪些内容|什么量级"),
+)
+
+
+def _intent_scores(question: str) -> tuple[int, int]:
+    q = question.strip().lower()
+
+    graph_score = sum(
+        weight for weight, pattern in _GRAPH_FEATURES
+        if re.search(pattern, q, flags=re.IGNORECASE)
+    )
+    vector_score = sum(
+        weight for weight, pattern in _VECTOR_FEATURES
+        if re.search(pattern, q, flags=re.IGNORECASE)
+    )
+
+    return graph_score, vector_score
+
+
+def _high_confidence_intent_route(question: str) -> tuple[str, str] | None:
+    q = question.strip().lower()
+
+    # Structured document fact/config request overrides product-name relation noise.
+    if (
+        _has_text_evidence_reference(q)
+        and _matches_any(_DOC_FACT_REQUEST_PATTERNS, q)
+        and not _has_explicit_relation_intent(q)
+    ):
+        return "vector", "V5文档事实保护：问题明确询问配置/属性/记录信息。"
+
+    graph_score, vector_score = _intent_scores(q)
+
+    if graph_score >= 5 and graph_score - vector_score >= 2:
+        return "graph", f"V5意图评分：GRAPH={graph_score}, VECTOR={vector_score}，关系意图高置信度。"
+
+    if vector_score >= 5 and vector_score - graph_score >= 2:
+        return "vector", f"V5意图评分：GRAPH={graph_score}, VECTOR={vector_score}，文档事实意图高置信度。"
+
+    if graph_score >= 4 and vector_score == 0:
+        return "graph", f"V5意图评分：GRAPH={graph_score}, VECTOR=0，关系意图明确。"
+
+    if vector_score >= 4 and graph_score == 0:
+        return "vector", f"V5意图评分：GRAPH=0, VECTOR={vector_score}，文档意图明确。"
+
+    return None
+
+
+# ----- V4.1 post-validation guards -----
+
+_EXPLICIT_RELATION_INTENT_PATTERNS = (
+    r"什么关系", r"是什么关系", r"有何关系",
+    r"什么联系", r"是什么联系", r"有何联系",
+    r"哪一种连接", r"哪种连接", r"关系标签", r"关系类型",
+    r"哪个节点", r"哪一个节点", r"哪个实体", r"哪一个实体",
+    r"上游实体", r"下游实体", r"谁指向", r"指向谁",
+    r"连过来", r"连出去", r"怎么连接", r"如何连接",
+    r"怎么关联", r"如何关联", r"怎么挂接", r"如何挂接",
+    r"归到哪个", r"对应哪个", r"属于什么", r"谁导致", r"谁决定",
+)
+
+_KNOWLEDGE_QUERY_PATTERNS = (
+    r"什么|为什么|如何|怎么|是否|会不会|能不能|多少|多大|多久|哪些|哪一|哪个|谁",
+    r"关系|联系|影响|原因|机制|限制|定义|区别|包含|属于|对应",
+    r"价格|成本|延迟|收入|用户数|日活|型号|配置|部署|云服务商|GPU",
+)
+
+_KB_OR_TECHNICAL_TERMS = (
+    "上下文", "token", "agent", "多轮", "系统提示词", "工具定义", "工具调用",
+    "推理过程", "模型", "旗舰模型", "长上下文", "成本", "延迟", "项目",
+    "gpu", "部署", "云服务商", "用户", "收入", "知识库", "文档", "资料",
+    "图谱", "neo4j",
+)
+
+def _has_explicit_relation_intent(question: str) -> bool:
+    return _matches_any(_EXPLICIT_RELATION_INTENT_PATTERNS, question.strip().lower())
+
+def _looks_like_knowledge_query(question: str) -> bool:
+    q = question.strip().lower()
+    return (
+        _matches_any(_KNOWLEDGE_QUERY_PATTERNS, q)
+        and any(term in q for term in _KB_OR_TECHNICAL_TERMS)
+    )
+
+
+# ----- V5 HYBRID boundary guard -----
+
+def _validate_llm_route(question: str, route: str, reason: str) -> tuple[str, str]:
+    q = question.strip()
+    route = (route or "").strip().lower()
+    graph_score, vector_score = _intent_scores(q)
+    explicit_relation = _has_explicit_relation_intent(q)
+    dual_evidence = _has_dual_evidence_intent(q)
+
+    # If the user clearly asks for both evidence sources, never let the LLM
+    # collapse the query to only VECTOR or only GRAPH.
+    if dual_evidence and route != "hybrid":
+        return (
+            "hybrid",
+            "V5双证据保护：用户明确要求文本证据与图谱证据共同回答。",
+        )
+
+    # HYBRID is not inferred merely because a relation can also be described in prose.
+    if route == "hybrid" and not dual_evidence:
+        if explicit_relation or graph_score > vector_score:
+            return (
+                "graph",
+                f"V5 HYBRID边界保护：没有双证据请求，关系意图更强 "
+                f"(GRAPH={graph_score}, VECTOR={vector_score})。",
+            )
+        if _looks_like_knowledge_query(q):
+            return (
+                "vector",
+                f"V5 HYBRID边界保护：没有双证据请求，按知识事实查询处理 "
+                f"(GRAPH={graph_score}, VECTOR={vector_score})。",
+            )
+
+    if route == "direct" and _looks_like_knowledge_query(q):
+        if explicit_relation or graph_score > vector_score:
+            return (
+                "graph",
+                f"V5 LLM结果保护：拒绝知识型DIRECT；关系意图更强 "
+                f"(GRAPH={graph_score}, VECTOR={vector_score})。",
+            )
+        return (
+            "vector",
+            f"V5 LLM结果保护：拒绝知识型DIRECT；按文档知识查询处理 "
+            f"(GRAPH={graph_score}, VECTOR={vector_score})。",
+        )
+
+    if route == "vector" and explicit_relation:
+        return (
+            "graph",
+            f"V5 LLM结果保护：问题具有明确实体关系意图 "
+            f"(GRAPH={graph_score}, VECTOR={vector_score})。",
+        )
+
+    if route == "graph" and not explicit_relation and vector_score >= 4 and graph_score == 0:
+        return (
+            "vector",
+            f"V5 LLM结果保护：问题主要是事实/属性查询而非实体关系 "
+            f"(GRAPH={graph_score}, VECTOR={vector_score})。",
+        )
+
+    return route, f"V5 LLM Router：{reason}"
+
 
 
 def ingest_document(file_path: str, filename: str) -> dict:
@@ -296,81 +686,42 @@ def _parse_router_response(content: str) -> tuple[str, str] | None:
 
 def _route_query(question: str) -> tuple[str, str]:
     """
-    Agent Router V1：规则优先 + LLM 兜底。
-
-    高置信度场景使用规则，减少一次 LLM 调用；
-    规则无法稳定判断时，再让 LLM 在 DIRECT / VECTOR / GRAPH / HYBRID 中四选一。
+    Agent Router V5:
+    1. 显式模态约束
+    2. 高置信度 DIRECT
+    3. GRAPH / VECTOR 意图评分
+    4. 不确定样本交给 LLM Router
+    5. 对 LLM 结果做轻量语义保护
+    6. API/解析失败才回退 VECTOR
     """
     q = question.strip()
-    q_lower = q.lower()
 
-    if _is_chitchat(q):
-        return "direct", "属于高置信度寒暄/感谢/告别，不需要知识库检索。"
+    modality = _explicit_modality_route(q)
+    if modality is not None:
+        return modality
 
-    # 明确要求同时使用文档和知识图谱时，直接 HYBRID。
-    has_doc_word = any(word in q for word in ("文档", "资料", "知识库"))
-    has_graph_word = any(word in q for word in ("知识图谱", "图谱", "Neo4j", "neo4j"))
-    if (has_doc_word and has_graph_word) or any(
-        phrase in q
-        for phrase in (
-            "结合文档和知识图谱",
-            "结合知识库和知识图谱",
-            "结合文档与知识图谱",
-            "结合知识库与知识图谱",
-        )
-    ):
-        return "hybrid", "问题明确要求同时结合文档内容和知识图谱关系。"
+    if _is_direct_non_kb_task(q):
+        return "direct", "V5高置信度非知识库任务命中，无需知识库检索。"
 
-    # 明确关系型问题优先 GRAPH。
-    relation_patterns = (
-        r"什么关系",
-        r"有何关系",
-        r"关系是什么",
-        r"之间.*关系",
-        r"如何关联",
-        r"怎么关联",
-        r"关联关系",
-    )
-    if any(re.search(pattern, q, flags=re.IGNORECASE) for pattern in relation_patterns):
-        return "graph", "问题主要询问实体之间的明确关系，适合知识图谱检索。"
+    scored = _high_confidence_intent_route(q)
+    if scored is not None:
+        return scored
 
-    # 明确的定义/文档内容问题优先 VECTOR。
-    vector_patterns = (
-        r"是什么",
-        r"什么意思",
-        r"定义",
-        r"文档里",
-        r"文档中",
-        r"资料里",
-        r"资料中",
-        r"知识库里",
-        r"知识库中",
-        r"讲了什么",
-        r"介绍",
-        r"说明",
-    )
-    if any(re.search(pattern, q, flags=re.IGNORECASE) for pattern in vector_patterns):
-        return "vector", "问题主要询问文档中的定义、说明或文本内容。"
-
-    # 其余问题交给轻量 Router LLM。
     try:
         response = _llm_client.chat.completions.create(
             model=settings.llm_model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": ROUTER_PROMPT.format(question=q),
-                }
-            ],
+            messages=[{"role": "user", "content": ROUTER_PROMPT.format(question=q)}],
             temperature=0,
         )
         parsed = _parse_router_response(response.choices[0].message.content)
         if parsed:
-            return parsed
+            route, reason = parsed
+            return _validate_llm_route(q, route, reason)
     except Exception as e:
         print(f"Agent Router 判断失败，回退 VECTOR: {e}")
 
-    return "vector", "规则和 LLM Router 未能稳定分类，按保守策略回退到文档向量检索。"
+    return "vector", "V5 Router 调用失败，按知识库优先策略回退到文档向量检索。"
+
 
 
 def _retrieve(question: str, route: str) -> tuple[list[dict], str]:
@@ -397,6 +748,36 @@ def _retrieve(question: str, route: str) -> tuple[list[dict], str]:
     hits = search(question, top_k=settings.top_k)
     graph_context = _build_graph_context(question)
     return hits, graph_context
+
+
+
+def _actor_execute(
+    question: str,
+    route: str,
+    attempt: int,
+) -> tuple[list[dict], str, dict]:
+    """
+    Actor：执行 Router / Planner 已选定的检索动作。
+
+    重要：这里内部仍然调用原有 _retrieve()，因此：
+    - VECTOR 仍然只调用 Chroma；
+    - GRAPH 仍然只调用 Neo4j；
+    - HYBRID 仍然调用 Chroma + Neo4j；
+    - 不改变 top_k、Embedding、图谱查询或检索排序逻辑。
+
+    新增的只是结构化 Actor Trace，便于前端展示与面试解释。
+    """
+    hits, graph_context = _retrieve(question, route=route)
+
+    trace = build_actor_trace(
+        attempt=attempt,
+        query=question,
+        route=route,
+        vector_hit_count=len(hits),
+        graph_context_available=bool(graph_context),
+    )
+
+    return hits, graph_context, trace.to_dict()
 
 
 def _definition_subject(question: str) -> str:
@@ -615,25 +996,52 @@ def _should_adopt_rewrite(
 
 def run_retrieval_pipeline(question: str) -> dict:
     """
-    真正的 Agent Router 检索管线：
+    Planner -> Actor -> Reflector 显式化后的 Agentic RAG 检索管线。
 
         用户问题
             ↓
-        Agent Router
+        Agent Router V5               （原逻辑不变）
             ↓
-    DIRECT / VECTOR / GRAPH / HYBRID
+        Planner                       （新增：生成确定性执行计划）
             ↓
-      对应检索方式
+        Actor                         （新增显式层：执行原 _retrieve）
             ↓
-      Context Judge
+        Reflector / Context Judge     （复用原 _is_context_sufficient）
             ↓
-      必要时 Query Rewrite
-            ↓
-      按原 route 二次检索
+      ┌─────┴──────────────┐
+      │充分                │不足
+      ↓                    ↓
+    Answer            Query Rewrite
+                           ↓
+                       Actor Retry
+                           ↓
+                       Reflector
+
+    这一改造只增加编排与可观察信息，不改变：
+    - Router V5；
+    - Chroma / Neo4j 检索；
+    - Context Judge 判定规则；
+    - Query Rewrite 的采用规则。
     """
     route, route_reason = _route_query(question)
 
+    # Planner 不额外调用 LLM，只根据已经确定的 route 展开执行计划。
+    plan = build_plan(route, route_reason=route_reason)
+
+    actor_trace: list[dict] = []
+    reflection_history: list[dict] = []
+
     if route == "direct":
+        reflection = build_reflection(
+            round_index=0,
+            route=route,
+            sufficient=True,
+            rewrite_allowed=False,
+            vector_hit_count=0,
+            graph_context_available=False,
+        ).to_dict()
+        reflection_history.append(reflection)
+
         return {
             "route": route,
             "route_reason": route_reason,
@@ -643,20 +1051,49 @@ def run_retrieval_pipeline(question: str) -> dict:
             "rewrite_candidate": None,
             "rewritten_query": None,
             "skipped_retrieval": True,
+            "context_sufficient": True,
+            "planner": plan.to_dict(),
+            "actor_trace": actor_trace,
+            "reflection": reflection,
+            "reflection_history": reflection_history,
         }
 
-    hits, graph_context = _retrieve(question, route=route)
+    # ------------------------------------------------------------------
+    # Actor round 1: 完全复用原来的 _retrieve(question, route)。
+    # ------------------------------------------------------------------
+    hits, graph_context, trace1 = _actor_execute(
+        question=question,
+        route=route,
+        attempt=1,
+    )
+    actor_trace.append(trace1)
 
-    rewrite_attempted = False
-    rewrite_candidate = None
-    rewritten_query = None
-
-    if not _is_context_sufficient(
+    first_sufficient = _is_context_sufficient(
         hits,
         graph_context,
         route=route,
         question=question,
-    ):
+    )
+
+    first_reflection = build_reflection(
+        round_index=1,
+        route=route,
+        sufficient=first_sufficient,
+        rewrite_allowed=not first_sufficient,
+        vector_hit_count=len(hits),
+        graph_context_available=bool(graph_context),
+    ).to_dict()
+    reflection_history.append(first_reflection)
+
+    rewrite_attempted = False
+    rewrite_candidate = None
+    rewritten_query = None
+    second_actor_executed = False
+
+    # ------------------------------------------------------------------
+    # Reflector 判断不足时，沿用原有 Query Rewrite + 原 route 重试逻辑。
+    # ------------------------------------------------------------------
+    if not first_sufficient:
         rewrite_attempted = True
 
         candidate_query = _rewrite_query(
@@ -667,9 +1104,15 @@ def run_retrieval_pipeline(question: str) -> dict:
         rewrite_candidate = candidate_query
 
         if candidate_query and candidate_query.strip() != question.strip():
-            # 重要：改写查询不改变 Router 决策，只在原 route 内重试。
-            hits2, graph_context2 = _retrieve(candidate_query, route=route)
+            hits2, graph_context2, trace2 = _actor_execute(
+                question=candidate_query,
+                route=route,
+                attempt=2,
+            )
+            actor_trace.append(trace2)
+            second_actor_executed = True
 
+            # 重要：仍然使用原 _should_adopt_rewrite()，不改变采用标准。
             if _should_adopt_rewrite(
                 original_hits=hits,
                 original_graph_context=graph_context,
@@ -681,6 +1124,31 @@ def run_retrieval_pipeline(question: str) -> dict:
                 hits, graph_context = hits2, graph_context2
                 rewritten_query = candidate_query
 
+    # 最终 Reflector 只描述“最终被采用的上下文”，不修改任何检索结果。
+    final_question = rewritten_query or question
+    final_sufficient = _is_context_sufficient(
+        hits,
+        graph_context,
+        route=route,
+        question=final_question,
+    )
+
+    # 第一次已经充分时，first_reflection 就是最终结果，不重复记录。
+    # 如果尝试了 Rewrite，则追加一个最终反思，明确闭环结束状态。
+    if rewrite_attempted:
+        final_round = 2 if second_actor_executed else 1
+        final_reflection = build_reflection(
+            round_index=final_round,
+            route=route,
+            sufficient=final_sufficient,
+            rewrite_allowed=False,
+            vector_hit_count=len(hits),
+            graph_context_available=bool(graph_context),
+        ).to_dict()
+        reflection_history.append(final_reflection)
+    else:
+        final_reflection = first_reflection
+
     return {
         "route": route,
         "route_reason": route_reason,
@@ -690,6 +1158,11 @@ def run_retrieval_pipeline(question: str) -> dict:
         "rewrite_candidate": rewrite_candidate,
         "rewritten_query": rewritten_query,
         "skipped_retrieval": False,
+        "context_sufficient": final_sufficient,
+        "planner": plan.to_dict(),
+        "actor_trace": actor_trace,
+        "reflection": final_reflection,
+        "reflection_history": reflection_history,
     }
 
 
@@ -749,34 +1222,115 @@ def _direct_answer_stream(question: str):
             yield delta
 
 
+
+def basic_answer_question(question: str) -> dict:
+    """Basic RAG：只执行一次 Chroma 向量检索，然后生成回答。"""
+    hits = search(question, top_k=settings.top_k)
+
+    if not hits:
+        return {
+            "answer": "知识库中没有检索到相关内容，请先确认已上传对应文档。",
+            "sources": [],
+            "route": "basic_rag",
+            "route_reason": "Basic RAG 固定执行一次 Chroma 向量检索，不经过 Agent Router。",
+        }
+
+    user_prompt = _build_prompt(question, hits, "")
+    response = _llm_client.chat.completions.create(
+        model=settings.llm_model_name,
+        messages=[
+            {"role": "system", "content": BASIC_RAG_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,
+    )
+
+    return {
+        "answer": response.choices[0].message.content,
+        "sources": _sources_from_hits(hits),
+        "route": "basic_rag",
+        "route_reason": "Basic RAG 固定执行一次 Chroma 向量检索，不经过 Agent Router。",
+    }
+
+
+def stream_basic_answer(question: str):
+    """
+    Basic RAG 流式回答。
+
+    流程固定为：
+        Question -> Chroma Top-K -> LLM stream
+
+    不经过 Router / Planner / Actor / Reflector / Query Rewrite / Neo4j。
+    """
+    hits = search(question, top_k=settings.top_k)
+
+    yield {
+        "type": "basic_info",
+        "data": {
+            "mode": "basic_rag",
+            "vector_hit_count": len(hits),
+        },
+    }
+
+    if not hits:
+        yield {"type": "sources", "data": []}
+        yield {
+            "type": "content",
+            "data": "知识库中没有检索到相关内容，请先确认已上传对应文档。",
+        }
+        return
+
+    user_prompt = _build_prompt(question, hits, "")
+    yield {"type": "sources", "data": _sources_from_hits(hits)}
+
+    stream = _llm_client.chat.completions.create(
+        model=settings.llm_model_name,
+        messages=[
+            {"role": "system", "content": BASIC_RAG_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,
+        stream=True,
+    )
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield {"type": "content", "data": delta}
+
 def answer_question(question: str) -> dict:
-    """非流式问答：Agent Router -> 检索/直答 -> Context Judge -> Query Rewrite。"""
+    """非流式问答：Router -> Planner -> Actor -> Reflector -> Answer。"""
     pipeline_result = run_retrieval_pipeline(question)
     route = pipeline_result["route"]
     route_reason = pipeline_result["route_reason"]
     hits = pipeline_result["hits"]
     graph_context = pipeline_result["graph_context"]
 
+    common_trace = {
+        "route": route,
+        "route_reason": route_reason,
+        "rewrite_attempted": pipeline_result["rewrite_attempted"],
+        "rewrite_candidate": pipeline_result["rewrite_candidate"],
+        "rewritten_query": pipeline_result["rewritten_query"],
+        "context_sufficient": pipeline_result["context_sufficient"],
+        "planner": pipeline_result["planner"],
+        "actor_trace": pipeline_result["actor_trace"],
+        "reflection": pipeline_result["reflection"],
+        "reflection_history": pipeline_result["reflection_history"],
+    }
+
     if route == "direct":
         return {
             "answer": _direct_answer(question),
             "sources": [],
-            "route": route,
-            "route_reason": route_reason,
-            "rewrite_attempted": False,
-            "rewrite_candidate": None,
-            "rewritten_query": None,
+            **common_trace,
         }
 
     if not hits and not graph_context:
         return {
             "answer": "知识库中没有检索到足够的相关内容，请先确认文档或知识图谱中存在对应信息。",
             "sources": [],
-            "route": route,
-            "route_reason": route_reason,
-            "rewrite_attempted": pipeline_result["rewrite_attempted"],
-            "rewrite_candidate": pipeline_result["rewrite_candidate"],
-            "rewritten_query": pipeline_result["rewritten_query"],
+            **common_trace,
         }
 
     user_prompt = _build_prompt(question, hits, graph_context)
@@ -795,11 +1349,7 @@ def answer_question(question: str) -> dict:
     return {
         "answer": answer,
         "sources": _sources_from_hits(hits),
-        "route": route,
-        "route_reason": route_reason,
-        "rewrite_attempted": pipeline_result["rewrite_attempted"],
-        "rewrite_candidate": pipeline_result["rewrite_candidate"],
-        "rewritten_query": pipeline_result["rewritten_query"],
+        **common_trace,
     }
 
 
@@ -807,13 +1357,39 @@ def stream_answer(question: str):
     """
     流式版本。
 
-    retrieval_info 会把 Router、Context Judge、Query Rewrite 的决策一并返回前端。
+    新增可观察事件：
+    - planner：Planner 生成的确定性计划
+    - actor：每一轮真实检索执行
+    - reflector：Context Judge / Reflector 的判断
+
+    原有事件保持不变：
+    - retrieval_info
+    - sources
+    - content
     """
     pipeline_result = run_retrieval_pipeline(question)
     route = pipeline_result["route"]
     route_reason = pipeline_result["route_reason"]
     hits = pipeline_result["hits"]
     graph_context = pipeline_result["graph_context"]
+
+    # 先把完整 Agent Trace 交给前端。
+    yield {
+        "type": "planner",
+        "data": pipeline_result["planner"],
+    }
+
+    for actor_item in pipeline_result["actor_trace"]:
+        yield {
+            "type": "actor",
+            "data": actor_item,
+        }
+
+    for reflection_item in pipeline_result["reflection_history"]:
+        yield {
+            "type": "reflector",
+            "data": reflection_item,
+        }
 
     yield {
         "type": "retrieval_info",
@@ -824,6 +1400,12 @@ def stream_answer(question: str):
             "rewrite_candidate": pipeline_result["rewrite_candidate"],
             "rewritten_query": pipeline_result["rewritten_query"],
             "skipped_retrieval": pipeline_result["skipped_retrieval"],
+            "context_sufficient": pipeline_result["context_sufficient"],
+            # 这里也冗余附带一次，方便旧前端或只监听 retrieval_info 的客户端兼容。
+            "planner": pipeline_result["planner"],
+            "actor_trace": pipeline_result["actor_trace"],
+            "reflection": pipeline_result["reflection"],
+            "reflection_history": pipeline_result["reflection_history"],
         },
     }
 
@@ -858,4 +1440,3 @@ def stream_answer(question: str):
         delta = chunk.choices[0].delta.content
         if delta:
             yield {"type": "content", "data": delta}
-

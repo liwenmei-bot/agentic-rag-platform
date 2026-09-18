@@ -210,20 +210,47 @@ def list_all_entity_names() -> list[str]:
         ]
 
 
+def _entity_occurs_in_question(normalized_name: str, normalized_question: str) -> bool:
+    """
+    判断实体名是否真的出现在用户问题中。
+
+    旧逻辑直接使用：
+        normalized_name in normalized_question
+
+    这会导致英文短实体误命中，例如 Neo4j 中存在实体 ``E`` 时，
+    问题 ``Agent 和多轮执行是什么关系？`` 中的 ``Agent`` 自带字母 ``e``，
+    因而错误命中 ``E``。
+
+    新逻辑：
+    - 含英文字母/数字的实体使用“字母数字边界”匹配；
+      ``E`` 不会命中 ``Agent``，但问题里真的写了 ``E`` 时仍能命中；
+    - 纯中文/其他非拉丁实体继续使用子串匹配，保持原有中文实体召回能力。
+    """
+    if not normalized_name:
+        return False
+
+    has_ascii_alnum = bool(re.search(r"[a-z0-9]", normalized_name))
+
+    if has_ascii_alnum:
+        pattern = (
+            r"(?<![a-z0-9])"
+            + re.escape(normalized_name)
+            + r"(?![a-z0-9])"
+        )
+        return re.search(pattern, normalized_question, flags=re.IGNORECASE) is not None
+
+    return normalized_name in normalized_question
+
+
 def match_entity_names(question: str, limit: int = 20) -> list[str]:
     """
     从用户问题中识别已经存在于 Neo4j 的实体。
 
-    与旧版：
-        name in question
-
-    不同，本版使用大小写不敏感匹配，因此：
-        Neo4j: "agent"
-        用户:  "Agent 和多轮执行是什么关系？"
-    可以正确命中 "agent" 和 "多轮执行"。
-
-    返回值始终使用 Neo4j 中保存的原始实体名，
-    这样后续 Cypher 查询可以直接精确匹配。
+    特性：
+    1. 英文大小写不敏感：Neo4j 的 ``agent`` 可以命中用户输入 ``Agent``；
+    2. 英文/数字实体使用边界匹配，避免 ``E`` 误命中 ``Agent`` 这类情况；
+    3. 中文实体保留子串匹配；
+    4. 返回 Neo4j 中保存的原始实体名，便于后续 Cypher 精确查询。
     """
     normalized_question = _normalize_for_match(question)
 
@@ -238,7 +265,7 @@ def match_entity_names(question: str, limit: int = 20) -> list[str]:
         if not normalized_name:
             continue
 
-        if normalized_name in normalized_question:
+        if _entity_occurs_in_question(normalized_name, normalized_question):
             matched.append(name)
 
     # 优先保留更具体、更长的实体；同时去重。

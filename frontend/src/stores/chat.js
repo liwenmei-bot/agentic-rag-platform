@@ -8,147 +8,196 @@ function makeBaseMessage(role, content = '') {
     sources: [],
     files: [],
     toolSteps: [],
+
+    // Knowledge-base RAG trace
     ragSteps: [],
     retrievalInfo: null,
     originalQuestion: '',
+
+    // Planner / Actor / Reflector explicit trace
+    planner: null,
+    actorTrace: [],
+    reflection: null,
+    reflectionHistory: [],
   }
 }
 
-function routeName(route) {
-  const value = (route || '').toLowerCase()
-  if (value === 'direct') return 'DIRECT'
-  if (value === 'vector') return 'VECTOR'
-  if (value === 'graph') return 'GRAPH'
-  if (value === 'hybrid') return 'HYBRID'
-  return 'UNKNOWN'
+function actionLabel(action) {
+  const map = {
+    direct_answer: 'Direct Answer',
+    vector_retrieval: 'Vector Retrieval / Chroma',
+    graph_retrieval: 'Graph Retrieval / Neo4j',
+    context_judge: 'Reflector / Context Judge',
+    answer_generation: 'Answer Generation',
+  }
+  return map[action] || action
 }
 
-function buildRagSteps(info) {
-  if (!info) return []
+function routeName(route) {
+  return String(route || 'unknown').toUpperCase()
+}
 
-  const route = (info.route || (info.skipped_retrieval ? 'direct' : 'hybrid')).toLowerCase()
-  const routeText = routeName(route)
+function buildRagSteps(message) {
+  const info = message.retrievalInfo
+  const planner = message.planner || info?.planner || null
+  const actorTrace = message.actorTrace?.length
+    ? message.actorTrace
+    : (info?.actor_trace || [])
+  const reflectionHistory = message.reflectionHistory?.length
+    ? message.reflectionHistory
+    : (info?.reflection_history || [])
 
-  const steps = [
-    {
-      key: 'router',
-      label: 'Agent Router',
+  if (!info && !planner && actorTrace.length === 0 && reflectionHistory.length === 0) {
+    return []
+  }
+
+  const steps = []
+  const route = info?.route || planner?.route || 'unknown'
+
+  // 1. Router
+  steps.push({
+    key: 'router',
+    label: 'Agent Router',
+    status: 'done',
+    detail: `已选择 ${routeName(route)} 路线。${info?.route_reason ? ` ${info.route_reason}` : ''}`,
+  })
+
+  // 2. Planner
+  if (planner) {
+    const planLabels = (planner.steps || [])
+      .map((step) => step.label || actionLabel(step.action))
+      .filter(Boolean)
+      .join(' → ')
+
+    steps.push({
+      key: 'planner',
+      label: 'Planner',
       status: 'done',
-      detail: `${routeText} · ${info.route_reason || '已根据用户问题选择执行路线。'}`,
-    },
-  ]
+      detail: planLabels
+        ? `执行计划：${planLabels}`
+        : `已根据 ${routeName(route)} 路线生成执行计划。`,
+    })
+  }
 
-  // DIRECT：不访问 Chroma / Neo4j，也不需要 Context Judge / Query Rewrite。
-  if (route === 'direct' || info.skipped_retrieval) {
-    steps.push(
-      {
-        key: 'vector',
-        label: 'Vector Retrieval',
-        status: 'neutral',
-        detail: 'DIRECT 路由，不执行 Chroma 文档向量检索。',
-      },
-      {
-        key: 'graph',
-        label: 'Graph Retrieval',
-        status: 'neutral',
-        detail: 'DIRECT 路由，不执行 Neo4j 知识图谱检索。',
-      },
-      {
-        key: 'judge',
-        label: 'Context Judge',
-        status: 'neutral',
-        detail: 'DIRECT 路由无需检索，因此跳过上下文充分性判断。',
-      },
-      {
-        key: 'rewrite',
-        label: 'Query Rewrite',
-        status: 'neutral',
-        detail: 'DIRECT 路由无需 Query Rewrite。',
-      },
-      {
-        key: 'generate',
-        label: '直接回答',
-        status: 'running',
-        detail: '正在直接生成回答。',
-      }
-    )
+  if (info?.skipped_retrieval) {
+    steps.push({
+      key: 'actor-direct',
+      label: 'Actor',
+      status: 'done',
+      detail: 'DIRECT 路线不访问 Chroma / Neo4j，直接执行回答生成。',
+    })
+
+    steps.push({
+      key: 'reflector-direct',
+      label: 'Reflector',
+      status: 'done',
+      detail: 'DIRECT 路线无需知识库证据，允许直接回答。',
+    })
+
+    steps.push({
+      key: 'generate',
+      label: 'Answer Generation',
+      status: 'running',
+      detail: '正在生成回答。',
+    })
 
     return steps
   }
 
-  // Router 真正决定检索分支：VECTOR / GRAPH / HYBRID。
-  steps.push({
-    key: 'vector',
-    label: 'Vector Retrieval',
-    status: route === 'vector' || route === 'hybrid' ? 'done' : 'neutral',
-    detail:
-      route === 'vector' || route === 'hybrid'
-        ? '已执行 Chroma 文档向量检索。'
-        : '当前为 GRAPH 路由，未执行 Chroma 文档向量检索。',
+  // 3. Actor - every real retrieval attempt
+  actorTrace.forEach((trace, index) => {
+    const actions = (trace.actions || [])
+      .map(actionLabel)
+      .join(' + ')
+
+    const evidence = [
+      `Vector hits: ${trace.vector_hit_count ?? 0}`,
+      `Graph: ${trace.graph_context_available ? 'YES' : 'NO'}`,
+    ].join(' · ')
+
+    steps.push({
+      key: `actor-${trace.attempt || index + 1}`,
+      label: `Actor · 第 ${trace.attempt || index + 1} 轮执行`,
+      status: 'done',
+      detail: `${actions || routeName(trace.route)}；${evidence}`,
+    })
   })
 
-  steps.push({
-    key: 'graph',
-    label: 'Graph Retrieval',
-    status: route === 'graph' || route === 'hybrid' ? 'done' : 'neutral',
-    detail:
-      route === 'graph' || route === 'hybrid'
-        ? '已执行 Neo4j 知识图谱关系检索。'
-        : '当前为 VECTOR 路由，未执行 Neo4j 知识图谱检索。',
-  })
-
-  if (info.rewrite_attempted) {
+  // Backward compatibility: if only retrieval_info exists, still show Actor.
+  if (actorTrace.length === 0 && info) {
     steps.push({
-      key: 'judge',
-      label: 'Context Judge',
-      status: 'warning',
-      detail: '首次检索上下文不足，进入 Semantic-safe Query Rewrite。',
-    })
-
-    steps.push({
-      key: 'rewrite',
-      label: 'Query Rewrite',
+      key: 'actor-fallback',
+      label: 'Actor',
       status: 'done',
-      detail: info.rewrite_candidate || '已生成更适合当前知识库的候选检索查询。',
-    })
-
-    steps.push({
-      key: 'retrieve-second',
-      label: `${routeText} 二次检索`,
-      status: info.rewritten_query ? 'done' : 'neutral',
-      detail: info.rewritten_query
-        ? `候选改写效果更好，已按 ${routeText} 路由重新检索并采用改写查询。`
-        : `已按 ${routeText} 路由尝试二次检索，但结果未优于原查询，因此保留第一次检索结果。`,
-    })
-  } else {
-    steps.push({
-      key: 'judge',
-      label: 'Context Judge',
-      status: 'done',
-      detail: '当前检索上下文充分。',
-    })
-
-    steps.push({
-      key: 'rewrite',
-      label: 'Query Rewrite',
-      status: 'neutral',
-      detail: '当前上下文充分，无需 Query Rewrite。',
+      detail: `已按 ${routeName(route)} 路线执行检索。`,
     })
   }
 
+  // 4. Reflector - every context judgment
+  reflectionHistory.forEach((reflection, index) => {
+    steps.push({
+      key: `reflector-${reflection.round_index ?? index + 1}-${index}`,
+      label: `Reflector · 第 ${reflection.round_index ?? index + 1} 轮反思`,
+      status: reflection.sufficient ? 'done' : 'warning',
+      detail: reflection.reason || (
+        reflection.sufficient
+          ? '当前证据充分，可以进入回答生成。'
+          : '当前证据不足，需要调整查询或安全拒答。'
+      ),
+    })
+  })
+
+  // Backward compatibility: if no explicit reflector event exists.
+  if (reflectionHistory.length === 0 && info) {
+    steps.push({
+      key: 'reflector-fallback',
+      label: 'Reflector / Context Judge',
+      status: info.context_sufficient === false ? 'warning' : 'done',
+      detail: info.context_sufficient === false
+        ? '当前证据不足。'
+        : '当前证据满足回答条件。',
+    })
+  }
+
+  // 5. Query Rewrite
+  if (info?.rewrite_attempted) {
+    steps.push({
+      key: 'rewrite',
+      label: 'Query Rewrite',
+      status: info.rewrite_candidate ? 'done' : 'warning',
+      detail: info.rewrite_candidate || '已尝试查询改写，但没有生成可用候选查询。',
+    })
+
+    if (info.rewritten_query) {
+      steps.push({
+        key: 'rewrite-adopt',
+        label: 'Rewrite Adoption',
+        status: 'done',
+        detail: `已采用改写查询：${info.rewritten_query}`,
+      })
+    } else {
+      steps.push({
+        key: 'rewrite-adopt',
+        label: 'Rewrite Adoption',
+        status: 'neutral',
+        detail: '候选改写未优于原查询结果，最终保留原检索上下文。',
+      })
+    }
+  }
+
+  // 6. Final answer
   steps.push({
     key: 'generate',
-    label: '生成回答',
+    label: 'Answer Generation',
     status: 'running',
-    detail:
-      route === 'hybrid'
-        ? '正在综合文档片段与知识图谱关系生成回答。'
-        : route === 'graph'
-          ? '正在根据知识图谱关系生成回答。'
-          : '正在根据文档检索结果生成回答。',
+    detail: '正在根据最终证据生成回答。',
   })
 
   return steps
+}
+
+function rebuildRagSteps(message) {
+  message.ragSteps = buildRagSteps(message)
 }
 
 function finishGenerateStep(message) {
@@ -166,7 +215,8 @@ export const useChatStore = defineStore('chat', {
     messages: [],
     isStreaming: false,
     uploadedFiles: [],
-    agentMode: false,
+    // knowledge = Basic RAG; agentic = Planner/Actor/Reflector; tools = legacy tool Agent
+    chatMode: 'knowledge',
   }),
 
   actions: {
@@ -216,8 +266,8 @@ export const useChatStore = defineStore('chat', {
         message.sources = sources
         message.files = files
 
-        // 当前后端的 session 历史只保存回答和 sources，
-        // 尚未持久化 retrieval_info，因此刷新页面后旧消息不显示 RAG 执行轨迹。
+        // 当前 session 历史仍只保存回答和 sources；
+        // Planner / Actor / Reflector Trace 暂不持久化。
         return message
       })
     },
@@ -252,8 +302,73 @@ export const useChatStore = defineStore('chat', {
       this.isStreaming = true
 
       try {
-        if (this.agentMode) {
-          await api.streamAgentChat(this.currentSessionId, question, (event) => {
+        if (this.chatMode === 'knowledge') {
+          // Basic RAG：只做一次 Chroma 检索，不展示 Agent Trace。
+          await api.streamBasicChat(this.currentSessionId, question, (event) => {
+            if (event.type === 'sources') {
+              assistantMessage.sources = event.data || []
+            } else if (event.type === 'content') {
+              assistantMessage.content += event.data || ''
+            }
+          })
+
+        } else if (this.chatMode === 'agentic') {
+          // Agentic RAG：Router V5 -> Planner -> Actor -> Reflector -> Rewrite/Retry。
+          await api.streamAgenticChat(this.currentSessionId, question, (event) => {
+            if (event.type === 'planner') {
+              assistantMessage.planner = event.data || null
+              rebuildRagSteps(assistantMessage)
+
+            } else if (event.type === 'actor') {
+              if (event.data) {
+                assistantMessage.actorTrace.push(event.data)
+              }
+              rebuildRagSteps(assistantMessage)
+
+            } else if (event.type === 'reflector') {
+              if (event.data) {
+                assistantMessage.reflection = event.data
+                assistantMessage.reflectionHistory.push(event.data)
+              }
+              rebuildRagSteps(assistantMessage)
+
+            } else if (event.type === 'retrieval_info') {
+              assistantMessage.retrievalInfo = event.data || null
+
+              if (!assistantMessage.planner && event.data?.planner) {
+                assistantMessage.planner = event.data.planner
+              }
+              if (assistantMessage.actorTrace.length === 0 && event.data?.actor_trace) {
+                assistantMessage.actorTrace = [...event.data.actor_trace]
+              }
+              if (
+                assistantMessage.reflectionHistory.length === 0 &&
+                event.data?.reflection_history
+              ) {
+                assistantMessage.reflectionHistory = [...event.data.reflection_history]
+                assistantMessage.reflection = event.data.reflection ||
+                  assistantMessage.reflectionHistory.at(-1) || null
+              }
+
+              rebuildRagSteps(assistantMessage)
+
+            } else if (event.type === 'sources') {
+              assistantMessage.sources = event.data || []
+
+            } else if (event.type === 'content') {
+              assistantMessage.content += event.data || ''
+
+            } else if (event.type === 'done') {
+              finishGenerateStep(assistantMessage)
+            }
+          })
+
+          // 兼容后端异常未发送 done 的情况。
+          finishGenerateStep(assistantMessage)
+
+        } else {
+          // 旧 Tool Agent：保留 knowledge_search / web_search / generate_report 等能力。
+          await api.streamToolAgentChat(this.currentSessionId, question, (event) => {
             if (event.type === 'tool_call') {
               assistantMessage.toolSteps.push({
                 name: event.data.name,
@@ -275,25 +390,9 @@ export const useChatStore = defineStore('chat', {
                 downloadUrl: `/files/${this.currentSessionId}/${event.data.filename}`,
               })
             } else if (event.type === 'content') {
-              assistantMessage.content += event.data
-            }
-          })
-        } else {
-          await api.streamChat(this.currentSessionId, question, (event) => {
-            if (event.type === 'retrieval_info') {
-              assistantMessage.retrievalInfo = event.data || null
-              assistantMessage.ragSteps = buildRagSteps(event.data)
-            } else if (event.type === 'sources') {
-              assistantMessage.sources = event.data || []
-            } else if (event.type === 'content') {
               assistantMessage.content += event.data || ''
-            } else if (event.type === 'done') {
-              finishGenerateStep(assistantMessage)
             }
           })
-
-          // 兼容后端在异常情况下没有发送 done 的场景。
-          finishGenerateStep(assistantMessage)
         }
 
         const session = this.sessions.find((s) => s.id === this.currentSessionId)
@@ -303,7 +402,7 @@ export const useChatStore = defineStore('chat', {
       } catch (e) {
         assistantMessage.content = '抱歉，回答生成失败，请检查后端服务是否正常运行。'
 
-        if (!this.agentMode) {
+        if (this.chatMode === 'agentic') {
           const generateStep = assistantMessage.ragSteps.find((item) => item.key === 'generate')
           if (generateStep) {
             generateStep.status = 'warning'

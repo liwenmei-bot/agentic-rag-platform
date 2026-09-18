@@ -41,24 +41,15 @@ export async function getGraph() {
   return res.json()
 }
 
-/**
- * Agent 模式的流式对话。
- * 当前事件类型：
- * - tool_call
- * - tool_result
- * - file
- * - content
- * - done
- */
-export async function streamAgentChat(sessionId, question, onEvent) {
-  const res = await fetch(`${BASE_URL}/agent/chat/stream`, {
+async function streamSse(url, body, onEvent, errorMessage) {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, question }),
+    body: JSON.stringify(body),
   })
 
   if (!res.ok || !res.body) {
-    throw new Error('Agent 请求失败')
+    throw new Error(errorMessage)
   }
 
   const reader = res.body.getReader()
@@ -79,63 +70,49 @@ export async function streamAgentChat(sessionId, question, onEvent) {
 
       const jsonStr = line.slice(5).trim()
       try {
-        const event = JSON.parse(jsonStr)
-        onEvent(event)
+        onEvent(JSON.parse(jsonStr))
       } catch (e) {
-        console.error('解析 Agent SSE 数据失败', e, jsonStr)
+        console.error('解析 SSE 数据失败', e, jsonStr)
       }
     }
   }
 }
 
-/**
- * 普通知识库模式的流式问答。
- *
- * 后端 /chat/stream 当前会返回：
- * - retrieval_info：Agent Router / Context Judge / Query Rewrite 的检索决策
- * - sources：引用来源
- * - content：流式回答正文
- * - done：本轮结束
- *
- * EventSource 原生只支持 GET，而这里是 POST，
- * 因此继续使用 fetch + ReadableStream 手动解析 SSE。
- */
+// 1) 基础知识库问答：一次 Chroma 检索 -> LLM。
+export async function streamBasicChat(sessionId, question, onEvent) {
+  return streamSse(
+    `${BASE_URL}/chat/basic/stream`,
+    { session_id: sessionId, question },
+    onEvent,
+    '知识库问答请求失败',
+  )
+}
+
+// 2) Agentic RAG：Router V5 -> Planner -> Actor -> Reflector -> Rewrite/Retry -> Answer。
+export async function streamAgenticChat(sessionId, question, onEvent) {
+  return streamSse(
+    `${BASE_URL}/chat/stream`,
+    { session_id: sessionId, question },
+    onEvent,
+    'Agentic RAG 请求失败',
+  )
+}
+
+// 3) 旧工具 Agent：knowledge_search / web_search / generate_report 等工具调用。
+export async function streamToolAgentChat(sessionId, question, onEvent) {
+  return streamSse(
+    `${BASE_URL}/agent/chat/stream`,
+    { session_id: sessionId, question },
+    onEvent,
+    '工具 Agent 请求失败',
+  )
+}
+
+// 兼容旧调用名。
 export async function streamChat(sessionId, question, onEvent) {
-  const res = await fetch(`${BASE_URL}/chat/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, question }),
-  })
+  return streamAgenticChat(sessionId, question, onEvent)
+}
 
-  if (!res.ok || !res.body) {
-    throw new Error('问答请求失败')
-  }
-
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
-
-    // SSE 每条事件由空行分隔；一次网络包可能包含多条或半条消息。
-    const parts = buffer.split('\n\n')
-    buffer = parts.pop() || ''
-
-    for (const part of parts) {
-      const line = part.trim()
-      if (!line.startsWith('data:')) continue
-
-      const jsonStr = line.slice(5).trim()
-      try {
-        const event = JSON.parse(jsonStr)
-        onEvent(event)
-      } catch (e) {
-        console.error('解析 Chat SSE 数据失败', e, jsonStr)
-      }
-    }
-  }
+export async function streamAgentChat(sessionId, question, onEvent) {
+  return streamToolAgentChat(sessionId, question, onEvent)
 }

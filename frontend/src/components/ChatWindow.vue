@@ -1,11 +1,36 @@
 <script setup>
-import { ref, nextTick, watch } from 'vue'
+import { computed, ref, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import MessageBubble from './MessageBubble.vue'
 
 const store = useChatStore()
 const input = ref('')
 const scrollContainer = ref(null)
+
+
+const modeCopy = computed(() => {
+  if (store.chatMode === 'agentic') {
+    return {
+      title: 'Agent 会先规划、执行检索并反思证据是否充分',
+      hint: '可观察 DIRECT / VECTOR / GRAPH / HYBRID 路由，以及 Planner、Actor、Reflector 和 Query Rewrite。',
+      placeholder: '让 Agent 判断该走哪条路线…（Enter 发送）',
+    }
+  }
+
+  if (store.chatMode === 'tools') {
+    return {
+      title: '工具 Agent 会根据任务调用外部工具',
+      hint: '适合测试知识库搜索、联网搜索、报告生成等 Tool Calling 能力。',
+      placeholder: '让工具 Agent 检索、搜索或生成报告…（Enter 发送）',
+    }
+  }
+
+  return {
+    title: '基础知识库问答',
+    hint: '固定执行一次 Chroma 向量检索，再基于文档证据流式回答。',
+    placeholder: '向知识库提问…（Enter 发送，Shift+Enter 换行）',
+  }
+})
 
 function scrollToBottom() {
   nextTick(() => {
@@ -68,18 +93,29 @@ function handleKeydown(e) {
     <div class="mode-bar">
       <button
         class="mode-btn"
-        :class="{ active: !store.agentMode }"
-        @click="store.agentMode = false"
+        :class="{ active: store.chatMode === 'knowledge' }"
+        title="Basic RAG：Chroma 单次检索 + 流式回答"
+        @click="store.chatMode = 'knowledge'"
       >
         知识库问答
       </button>
 
       <button
         class="mode-btn"
-        :class="{ active: store.agentMode }"
-        @click="store.agentMode = true"
+        :class="{ active: store.chatMode === 'agentic' }"
+        title="Agentic RAG：Router + Planner + Actor + Reflector"
+        @click="store.chatMode = 'agentic'"
       >
         Agent 模式
+      </button>
+
+      <button
+        class="mode-btn"
+        :class="{ active: store.chatMode === 'tools' }"
+        title="旧 Tool Agent：搜索 / 报告生成等工具调用"
+        @click="store.chatMode = 'tools'"
+      >
+        工具 Agent
       </button>
     </div>
 
@@ -87,17 +123,9 @@ function handleKeydown(e) {
       <div v-if="store.messages.length === 0" class="empty-state">
         <p class="empty-mark">§</p>
 
-        <p class="empty-title">
-          {{ store.agentMode ? 'Agent 会自主判断该用什么工具' : '知识库空空如也，从提问开始' }}
-        </p>
+        <p class="empty-title">{{ modeCopy.title }}</p>
 
-        <p class="empty-hint">
-          {{
-            store.agentMode
-              ? '试试问一个需要检索、搜索或生成报告的问题，观察它的执行过程。'
-              : '先在左侧上传一份文档，再向它提问——回答会标注引用出处。'
-          }}
-        </p>
+        <p class="empty-hint">{{ modeCopy.hint }}</p>
       </div>
 
       <div v-else class="message-list">
@@ -107,8 +135,8 @@ function handleKeydown(e) {
           class="message-entry"
         >
           <!--
-            普通知识库模式的 Agent Router / Context Judge / Query Rewrite 可视化。
-            Agent 工具调用模式仍继续使用 MessageBubble 原有的 toolSteps 展示。
+            只有 Agentic RAG 模式会生成 ragSteps。
+            Basic RAG 只展示答案与来源；Tool Agent 继续用 MessageBubble 的 toolSteps。
           -->
           <div
             v-if="msg.role === 'assistant' && msg.ragSteps?.length"
@@ -118,7 +146,7 @@ function handleKeydown(e) {
               <div>
                 <div class="rag-trace-title">Agent 检索过程</div>
                 <div class="rag-trace-subtitle">
-                  Router · Retrieval · Context Judge · Query Rewrite
+                  Router · Planner · Actor · Reflector · Query Rewrite
                 </div>
               </div>
 
@@ -139,10 +167,25 @@ function handleKeydown(e) {
                 </span>
 
                 <span
-                  v-else-if="msg.retrievalInfo && !msg.retrievalInfo.skipped_retrieval"
+                  v-else-if="
+                    msg.retrievalInfo &&
+                    !msg.retrievalInfo.skipped_retrieval &&
+                    msg.retrievalInfo.context_sufficient !== false
+                  "
                   class="enough-badge"
                 >
                   Context OK
+                </span>
+
+                <span
+                  v-else-if="
+                    msg.retrievalInfo &&
+                    !msg.retrievalInfo.skipped_retrieval &&
+                    msg.retrievalInfo.context_sufficient === false
+                  "
+                  class="weak-badge"
+                >
+                  Evidence Weak
                 </span>
               </div>
             </div>
@@ -157,6 +200,35 @@ function handleKeydown(e) {
               </div>
               <div class="router-summary-reason">
                 {{ msg.retrievalInfo.route_reason || '已根据问题意图选择检索路线。' }}
+              </div>
+            </div>
+
+            <div
+              v-if="msg.planner || msg.reflection"
+              class="agent-loop-summary"
+            >
+              <div
+                v-if="msg.planner"
+                class="loop-summary-row"
+              >
+                <span class="loop-summary-label">Planner</span>
+                <span class="loop-summary-value">
+                  {{
+                    (msg.planner.steps || [])
+                      .map((step) => step.label || step.action)
+                      .join(' → ')
+                  }}
+                </span>
+              </div>
+
+              <div
+                v-if="msg.reflection"
+                class="loop-summary-row"
+              >
+                <span class="loop-summary-label">Reflector</span>
+                <span class="loop-summary-value">
+                  {{ msg.reflection.reason || '已完成上下文充分性判断。' }}
+                </span>
               </div>
             </div>
 
@@ -229,11 +301,7 @@ function handleKeydown(e) {
       <textarea
         v-model="input"
         class="input-box"
-        :placeholder="
-          store.agentMode
-            ? '让 Agent 帮你检索、搜索或生成报告…（Enter 发送）'
-            : '向知识库提问…（Enter 发送，Shift+Enter 换行）'
-        "
+        :placeholder="modeCopy.placeholder"
         rows="1"
         @keydown="handleKeydown"
       />
@@ -337,7 +405,8 @@ function handleKeydown(e) {
 
 .route-badge,
 .rewrite-badge,
-.enough-badge {
+.enough-badge,
+.weak-badge {
   flex: none;
   border-radius: 999px;
   padding: 4px 8px;
@@ -375,6 +444,12 @@ function handleKeydown(e) {
   background: transparent;
 }
 
+.weak-badge {
+  border: 1px solid var(--amber-500);
+  color: var(--paper-ink);
+  background: rgba(217, 164, 65, 0.12);
+}
+
 .router-summary {
   margin: calc(var(--space-4) * -0.35) 0 var(--space-4);
   padding: 10px 12px;
@@ -401,6 +476,37 @@ function handleKeydown(e) {
   color: var(--text-faint);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.agent-loop-summary {
+  margin: 0 0 var(--space-4);
+  padding: 10px 12px;
+  border: 1px solid rgba(42, 38, 32, 0.1);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.loop-summary-row {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.loop-summary-label {
+  color: var(--amber-600);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.loop-summary-value {
+  color: var(--paper-ink);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .rag-steps {
@@ -594,6 +700,12 @@ function handleKeydown(e) {
   }
 
   .rewrite-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+
+  .loop-summary-row {
     grid-template-columns: 1fr;
     gap: 2px;
   }
