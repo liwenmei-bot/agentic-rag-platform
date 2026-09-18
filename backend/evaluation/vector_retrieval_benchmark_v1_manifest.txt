@@ -1,0 +1,11 @@
+Vector Retrieval Benchmark V1
+============================
+Knowledge base: agentic_rag_knowledge_base.txt
+Chunking: sentence-aware, chunk_size=500, chunk_overlap=50
+Current reconstructed chunks: 21
+Benchmark questions: 42 (2 per chunk)
+All expected_route: VECTOR
+All answerable: 1
+Gold chunk indices were assigned from the source chunk contents BEFORE any retrieval run.
+The old context-window benchmark was NOT reused because its gold facts are absent from the current knowledge base.
+Use evaluate_vector_retrieval.py with this benchmark for strict Hit@1/3/5 and MRR.

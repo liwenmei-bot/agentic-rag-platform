@@ -1,0 +1,51 @@
+Rerank Evaluation V1 - Experiment Manifest
+========================================
+
+Purpose
+-------
+Measure the effect of RERANKING only.
+
+Frozen baseline
+---------------
+Vector Retrieval V1
+Questions: 42
+Strict Hit@1: 69.05%
+Strict Hit@3: 90.48%
+Strict Hit@5: 95.24%
+Strict MRR: 0.8044
+
+Experimental controls
+---------------------
+1. Keep the current Chroma collection unchanged.
+2. Keep chunk_size=500 and chunk_overlap=50 unchanged.
+3. Keep the same 42-question benchmark and Gold Chunk labels unchanged.
+4. Do NOT generate a new vector candidate set.
+5. Read the exact Top-5 candidates already saved in:
+   evaluation/fixtures/vector_retrieval_v1_top5.csv
+6. Rerank only those frozen five candidates.
+7. Therefore, Hit@5 MUST stay equal to 95.24% when candidate_k=5.
+   If Hit@5 changes, the experiment implementation is inconsistent.
+
+Reranker
+--------
+Default: BAAI/bge-reranker-base
+Interface: sentence_transformers.CrossEncoder
+
+Primary metrics
+---------------
+- Hit@1 before vs after
+- Hit@3 before vs after
+- MRR before vs after
+- Rescue count
+- Harm count
+- Warm rerank latency P50 / P95
+
+Interpretation
+--------------
+The theoretical ceiling for Hit@1 using ONLY the frozen Top-5 candidates is
+the baseline candidate recall@5 = 95.24%.
+
+The two queries whose Gold Chunk is not present in the frozen Top-5 cannot be
+fixed by reranking. They belong to the later Query Rewrite / recall stage.
+
+Do not tune chunking, embedding, benchmark, or Chroma during this experiment.
