@@ -1,0 +1,81 @@
+﻿id,split,case_type,challenge_type,question,expected_route,difficulty,freeze_status,notes
+1,holdout_04_final,vector,definition,RAG 流程中的 chunk metadata 是做什么的？,vector,medium,frozen,Fresh blind holdout item.
+2,holdout_04_final,graph,workflow_relation,Answer Generation 前面直接连接的是哪个汇总步骤？,graph,medium,frozen,Fresh blind holdout item.
+3,holdout_04_final,direct,social_variant,先忙别的去了，回头聊。,direct,easy,frozen,Fresh blind holdout item.
+4,holdout_04_final,vector,project_fact,这个项目有没有说明 Python 运行版本要求？,vector,medium,frozen,Fresh blind holdout item.
+5,holdout_04_final,direct,arithmetic,144除以12再乘3是多少？,direct,easy,frozen,Fresh blind holdout item.
+6,holdout_04_final,vector,mechanism,rerank 放在召回之后通常能改善什么？,vector,medium,frozen,Fresh blind holdout item.
+7,holdout_04_final,direct,text_transform,把“ONE TWO THREE”全部改为小写。,direct,easy,frozen,Fresh blind holdout item.
+8,holdout_04_final,direct,creative,写一句适合演示结束时说的话。,direct,easy,frozen,Fresh blind holdout item.
+9,holdout_04_final,vector,project_fact,配置里是否给出了 Neo4j Bolt 端口？,vector,hard,frozen,Fresh blind holdout item.
+10,holdout_04_final,graph,workflow_relation,从检索上下文到最终回复，中间的节点顺序是什么？,graph,medium,frozen,Fresh blind holdout item.
+11,holdout_04_final,hybrid,dual_evidence,请同时引用配置说明和 Neo4j 关系，解释 backend 与数据库服务如何协作。,hybrid,hard,frozen,Fresh blind holdout item.
+12,holdout_04_final,vector,mechanism,Context Judge 主要解决检索上下文的哪类质量问题？,vector,medium,frozen,Fresh blind holdout item.
+13,holdout_04_final,direct,text_transform,把“api/frontend/backend”按斜杠拆开。,direct,easy,frozen,Fresh blind holdout item.
+14,holdout_04_final,graph,workflow_relation,Chunking 完成以后下一个负责生成向量的节点是谁？,graph,medium,frozen,Fresh blind holdout item.
+15,holdout_04_final,direct,text_transform,将“FastAPI”中的字母统一改成小写。,direct,easy,frozen,Fresh blind holdout item.
+16,holdout_04_final,direct,translation,“streaming response”翻成中文。,direct,easy,frozen,Fresh blind holdout item.
+17,holdout_04_final,hybrid,dual_evidence,从文档内容确认安全拒答的目的，再从流程图找出它发生在回答链路的哪个阶段。,hybrid,hard,frozen,Fresh blind holdout item.
+18,holdout_04_final,vector,definition,向量数据库里的 collection 通常指什么？,vector,medium,frozen,Fresh blind holdout item.
+19,holdout_04_final,direct,arithmetic,25乘4再加6等于几？,direct,easy,frozen,Fresh blind holdout item.
+20,holdout_04_final,hybrid,dual_evidence,把 README 的启动服务说明与 Docker 服务依赖关系放在一起总结。,hybrid,hard,frozen,Fresh blind holdout item.
+21,holdout_04_final,vector,project_fact,项目文档有没有写 SSE 接口的路径？,vector,hard,frozen,Fresh blind holdout item.
+22,holdout_04_final,hybrid,dual_evidence,先从说明材料确认 FastAPI 后端的职责，再从服务图看它依赖哪些组件。,hybrid,hard,frozen,Fresh blind holdout item.
+23,holdout_04_final,hybrid,dual_evidence,既参考 README 对前端的说明，也查看关系图中 Frontend 与 SSE Stream 的连接。,hybrid,hard,frozen,Fresh blind holdout item.
+24,holdout_04_final,direct,creative,想一句十个字以内的项目启动口号。,direct,easy,frozen,Fresh blind holdout item.
+25,holdout_04_final,hybrid,dual_evidence,先核对 README 对向量库的说明，再沿图谱确认它和 Embedding Service 的连接。,hybrid,hard,frozen,Fresh blind holdout item.
+26,holdout_04_final,vector,project_fact,配置说明里有没有默认的相似度阈值？,vector,hard,frozen,Fresh blind holdout item.
+27,holdout_04_final,hybrid,dual_evidence,用项目说明回答 Query Rewrite 为什么存在，再用知识图确认它触发后回到哪里。,hybrid,hard,frozen,Fresh blind holdout item.
+28,holdout_04_final,hybrid,dual_evidence,先查文档里 CORS 的用途，再沿组件图说明它位于请求链路的哪里。,hybrid,hard,frozen,Fresh blind holdout item.
+29,holdout_04_final,graph,dependency_relation,Docker Compose 服务图中 backend 依赖哪些基础服务？,graph,medium,frozen,Fresh blind holdout item.
+30,holdout_04_final,direct,social_variant,嗨呀，我只是来打个招呼。,direct,easy,frozen,Fresh blind holdout item.
+31,holdout_04_final,direct,text_transform,把“rag_pipeline”全部转成大写。,direct,easy,frozen,Fresh blind holdout item.
+32,holdout_04_final,direct,creative,给我一句简短的代码提交完成提示语。,direct,easy,frozen,Fresh blind holdout item.
+33,holdout_04_final,vector,project_fact,README 是否注明前端开发服务器默认监听哪个端口？,vector,hard,frozen,Fresh blind holdout item.
+34,holdout_04_final,direct,creative,给 README 写一句很短的结尾感谢语。,direct,easy,frozen,Fresh blind holdout item.
+35,holdout_04_final,direct,social_variant,辛苦啦，明天再继续。,direct,easy,frozen,Fresh blind holdout item.
+36,holdout_04_final,hybrid,dual_evidence,文字材料负责解释 embedding 的功能，知识图负责说明它与 Chroma 的连接，请一起回答。,hybrid,hard,frozen,Fresh blind holdout item.
+37,holdout_04_final,graph,entity_relation,Neo4j 中的实体节点和关系三元组如何挂接？,graph,medium,frozen,Fresh blind holdout item.
+38,holdout_04_final,graph,workflow_relation,Query Rewrite 重新生成问题后会回到哪个检索环节？,graph,medium,frozen,Fresh blind holdout item.
+39,holdout_04_final,hybrid,dual_evidence,把文档里对 chunk metadata 的解释与图谱中 Chunk 节点的连接关系合在一个答案里。,hybrid,hard,frozen,Fresh blind holdout item.
+40,holdout_04_final,direct,translation,把“知识图谱”翻成英文。,direct,easy,frozen,Fresh blind holdout item.
+41,holdout_04_final,graph,dependency_relation,Frontend Chat View 与流式事件之间在图里是什么关联？,graph,medium,frozen,Fresh blind holdout item.
+42,holdout_04_final,vector,project_fact,README 中是否写了前端构建命令？,vector,medium,frozen,Fresh blind holdout item.
+43,holdout_04_final,vector,project_fact,项目有没有记录向量检索一次默认返回多少条候选？,vector,hard,frozen,Fresh blind holdout item.
+44,holdout_04_final,hybrid,dual_evidence,请综合文字资料中的 rerank 作用和关系路径中的前后步骤来说明它的位置。,hybrid,hard,frozen,Fresh blind holdout item.
+45,holdout_04_final,graph,entity_relation,Embedding 模型节点在图中指向哪个存储组件？,graph,medium,frozen,Fresh blind holdout item.
+46,holdout_04_final,vector,project_fact,项目是否记录了 embedding 模型的向量维度？,vector,hard,frozen,Fresh blind holdout item.
+47,holdout_04_final,graph,entity_relation,Chroma collection 与文档 chunk 在图谱里是哪种关系？,graph,medium,frozen,Fresh blind holdout item.
+48,holdout_04_final,hybrid,dual_evidence,两个角度都要：从文字说明解释 HYBRID 的用途，从图结构说明两条分支在哪里汇合。,hybrid,hard,frozen,Fresh blind holdout item.
+49,holdout_04_final,hybrid,dual_evidence,先从资料确认 Graph Retrieval 的职责，再沿知识图找到它到最终回答阶段的路径。,hybrid,hard,frozen,Fresh blind holdout item.
+50,holdout_04_final,hybrid,dual_evidence,我想同时看文字里对 Context Judge 的职责描述，以及关系图里它前后接哪些节点。,hybrid,hard,frozen,Fresh blind holdout item.
+51,holdout_04_final,vector,project_fact,后端文档里有没有说明 FastAPI 应用的启动模块？,vector,hard,frozen,Fresh blind holdout item.
+52,holdout_04_final,hybrid,dual_evidence,别只讲概念，也别只列节点，请结合项目说明和关系图解释 Answer Generation。,hybrid,hard,frozen,Fresh blind holdout item.
+53,holdout_04_final,direct,translation,“semantic search”用中文怎么表达？,direct,easy,frozen,Fresh blind holdout item.
+54,holdout_04_final,graph,workflow_relation,Router 判定 GRAPH 后对应哪条后端分支？,graph,medium,frozen,Fresh blind holdout item.
+55,holdout_04_final,graph,workflow_relation,Context Judge 认为证据不足时，哪个节点会接手？,graph,medium,frozen,Fresh blind holdout item.
+56,holdout_04_final,direct,social_variant,收到，那我们改天继续。,direct,easy,frozen,Fresh blind holdout item.
+57,holdout_04_final,vector,project_fact,说明材料是否列出了 CORS 允许的来源？,vector,hard,frozen,Fresh blind holdout item.
+58,holdout_04_final,graph,workflow_relation,Router 判定 VECTOR 后会把请求交给哪个检索节点？,graph,medium,frozen,Fresh blind holdout item.
+59,holdout_04_final,hybrid,dual_evidence,请把配置文档中的 Neo4j 服务信息和服务依赖图中的上下游关系一起解释。,hybrid,hard,frozen,Fresh blind holdout item.
+60,holdout_04_final,direct,arithmetic,42加19再减11等于多少？,direct,easy,frozen,Fresh blind holdout item.
+61,holdout_04_final,hybrid,dual_evidence,先用项目说明解释文档切块，再用关系网络说明 Chunk、Embedding、Chroma 三者如何相连。,hybrid,hard,frozen,Fresh blind holdout item.
+62,holdout_04_final,hybrid,dual_evidence,把资料里的 top_k 配置含义和图谱里的 Vector Retrieval 节点关系联合说明。,hybrid,hard,frozen,Fresh blind holdout item.
+63,holdout_04_final,vector,project_fact,项目说明有没有写 Chroma 的持久化目录在哪里？,vector,hard,frozen,Fresh blind holdout item.
+64,holdout_04_final,graph,workflow_relation,Vector Retrieval 的输出会被哪个判断节点消费？,graph,medium,frozen,Fresh blind holdout item.
+65,holdout_04_final,graph,workflow_relation,HYBRID 路线里两路检索结果在哪个节点重新合流？,graph,medium,frozen,Fresh blind holdout item.
+66,holdout_04_final,vector,project_fact,Docker Compose 配置是否设置了 Neo4j 的数据卷？,vector,hard,frozen,Fresh blind holdout item.
+67,holdout_04_final,graph,workflow_relation,从 User Query 到 Agent Router 中间还经过其他节点吗？,graph,medium,frozen,Fresh blind holdout item.
+68,holdout_04_final,graph,workflow_relation,Graph Retrieval 的结果最终流向哪个回答阶段？,graph,medium,frozen,Fresh blind holdout item.
+69,holdout_04_final,direct,text_transform,把“neo4j-bolt”里的字母改成大写。,direct,easy,frozen,Fresh blind holdout item.
+70,holdout_04_final,vector,mechanism,为什么检索分数很接近时需要谨慎决定是否回答？,vector,medium,frozen,Fresh blind holdout item.
+71,holdout_04_final,graph,dependency_relation,Embedding Service 和 Vector Store 之间是什么依赖关系？,graph,medium,frozen,Fresh blind holdout item.
+72,holdout_04_final,graph,dependency_relation,FastAPI Backend 与 SSE Stream 在关系网络中怎么连接？,graph,medium,frozen,Fresh blind holdout item.
+73,holdout_04_final,vector,mechanism,为什么文档切得太碎也可能影响召回质量？,vector,medium,frozen,Fresh blind holdout item.
+74,holdout_04_final,graph,workflow_relation,Document Ingestion 到 Chunking 在流程图里是什么前后关系？,graph,medium,frozen,Fresh blind holdout item.
+75,holdout_04_final,vector,mechanism,Query Rewrite 为什么可能对短而含糊的问题有帮助？,vector,medium,frozen,Fresh blind holdout item.
+76,holdout_04_final,vector,project_fact,说明文档是否提到回答生成使用的模型名称？,vector,hard,frozen,Fresh blind holdout item.
+77,holdout_04_final,hybrid,dual_evidence,需要文档事实也需要图谱关系：解释 Vector Store 在整条 RAG 链路里的作用与连接。,hybrid,hard,frozen,Fresh blind holdout item.
+78,holdout_04_final,hybrid,dual_evidence,一边根据 README 说明 SSE 的用途，一边根据组件关系网络说明事件送到哪个前端模块。,hybrid,hard,frozen,Fresh blind holdout item.
+79,holdout_04_final,direct,social_variant,多谢，今天就先收工。,direct,easy,frozen,Fresh blind holdout item.
+80,holdout_04_final,graph,workflow_relation,安全拒答节点在回答生成链路的哪个位置？,graph,medium,frozen,Fresh blind holdout item.

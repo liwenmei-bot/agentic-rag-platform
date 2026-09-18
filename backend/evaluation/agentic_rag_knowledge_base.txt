@@ -1,0 +1,417 @@
+# Agentic RAG Platform 检索评测知识库
+
+> 用途：用于本项目的向量检索（Vector Retrieval）与后续 RAG 评测。
+> 原则：只记录 README 与当前项目已经实现、已经验证的功能；未提供的信息明确标记为“未提供”，不编造生产数据、用户规模、收入、云厂商、GPU 型号等事实。
+
+---
+
+## 1. 项目定位
+
+Agentic RAG Platform 是一个融合 RAG 检索、知识图谱和 Agent 工具调用的智能知识平台。项目支持用户上传文档，自动完成解析、切块和向量化，并构建可检索的知识库。用户提问后，系统可以检索相关内容并生成带来源引用的回答，同时支持流式输出。项目还会从上传文档中抽取实体与关系，并将这些实体关系写入知识图谱，以便在问答阶段补充关系证据。
+
+项目的整体目标不是只实现一个单一向量检索接口，而是把文档检索、知识图谱、Agent 路由、流式回答和 Docker 部署组合成一条完整的工程链路。项目参考了 xerrors/Yuxi 等开源项目的架构思路，但当前仓库是在此基础上独立设计和实现的。
+
+---
+
+## 2. 文档上传与知识库构建
+
+系统支持上传 PDF、Word 和 TXT 文档。文档进入后端后，会先被解析成文本，再进行切块。切块后的文本片段会被转换成向量表示，并写入 Chroma 向量数据库。
+
+当前向量库使用 Chroma。文本向量由 sentence-transformers 体系下的 bge-small-zh 模型生成。每一个文本块都会保存来源文件名、文档标识和 chunk_index 等元数据，便于后续检索、去重、引用和评测。
+
+同名文件重新上传时，系统采用替换语义：先对新文本计算 embedding，再删除 Chroma 中同名文件对应的旧 chunks，最后写入新版本。这样可以避免多次上传同一个文件后，在向量库中出现大量重复 chunk。
+
+---
+
+## 3. Chunk 与向量检索
+
+向量检索的基本单位是文档 Chunk。当前项目默认切块参数为 chunk_size=500、chunk_overlap=50。也就是说，较长文本会被切成多个长度约 500 的片段，并在相邻片段之间保留一定重叠，减少边界位置的信息丢失。
+
+检索时，系统不会直接只取 top_k 个候选，而是先从 Chroma 中获取更多候选，再基于 filename 和 chunk_index 去重，最后保留真正的 Top-K 唯一结果。这样可以避免历史重复数据或重复 chunk 占满检索结果。
+
+向量检索结果包含 content、filename、doc_id、chunk_index 和 score。score 来自距离的转换，用于排序，不应该解释成“正确概率”或“置信概率”。
+
+---
+
+## 4. Embedding
+
+Embedding 的作用是把查询文本和文档 Chunk 转换成向量，使系统能够根据语义相似度查找相关内容。项目使用 sentence-transformers，并采用 bge-small-zh 作为中文向量模型。
+
+文档入库时，系统对多个 chunks 批量计算 embedding；查询时，对用户问题计算 query embedding。Chroma 使用查询向量与已存储文档向量之间的距离进行排序，从而返回最相关的文本片段。
+
+Embedding 负责表示语义，但不负责最终回答。检索到的片段仍然需要交给后续上下文判断、回答生成或混合检索流程处理。
+
+---
+
+## 5. Chroma
+
+Chroma 是项目中的向量数据库，负责持久化文档 Chunk 的向量和元数据。当前 collection 名称为 documents。
+
+Chroma 中每个 chunk 都会保留 filename、doc_id 和 chunk_index。filename 表示来源文档，doc_id 表示一次文档记录，chunk_index 表示该块在当前文档中的位置编号。
+
+项目对 Chroma 的一个重要工程改进是去重。重新上传同名文件时会先删除旧 chunks；查询时又会再次按照 filename + chunk_index 对结果去重。这两层机制分别解决“入库重复”和“检索结果重复”的问题。
+
+---
+
+## 6. 基础 RAG 问答流程
+
+项目第一阶段实现的是基础 RAG：文档解析、文本切块、向量化、向量检索和带引用回答。
+
+用户提交问题后，系统会根据问题检索相关知识库片段。检索结果作为上下文证据提供给大语言模型，大语言模型基于这些证据组织最终回答。回答需要尽可能保持与检索证据一致，并提供来源信息。
+
+RAG 的价值在于让回答不仅依赖模型参数中的通用知识，还可以使用用户上传的私有文档内容。
+
+---
+
+## 7. Agent Router
+
+当前项目实现了四路 Agent Router，用于决定一个问题应该走哪种处理路径。
+
+DIRECT：不需要知识库证据的任务，例如寒暄、简单翻译、简单算术、轻量文本创作和简单文本转换。
+
+VECTOR：主要依赖文档文本证据的问题，例如定义、事实、配置、数值、机制、影响、项目属性和说明文档中的信息。
+
+GRAPH：主要依赖实体关系的问题，例如节点之间的连接、依赖、上下游、归属、关系标签、流向和关系路径。
+
+HYBRID：同时需要文本证据与图谱关系的问题。只有用户明确要求结合文档/文字证据和图谱/Neo4j 关系时，才应该进入 HYBRID。
+
+---
+
+## 8. Router 的决策结构
+
+当前 Router 不是单纯把所有问题都交给 LLM 判断，而是采用分层决策。
+
+第一层是 Evidence Source Parser，用来识别“只看文档”“只看图谱”“文档和图谱都要”等明确证据源需求。
+
+第二层识别高置信度 DIRECT 任务，例如寒暄、简单翻译、算术和轻量文本处理。
+
+第三层使用 GRAPH / VECTOR 意图特征进行确定性评分。明确关系意图优先 GRAPH，明确文档事实意图优先 VECTOR。
+
+只有仍然存在歧义的问题才进入 LLM Router。这样可以减少不必要的大模型调用，并降低大多数路由请求的延迟。
+
+---
+
+## 9. Evidence Source Parser
+
+Evidence Source Parser 用于识别用户真正想使用哪种证据，而不是只看问题中是否出现“文档”“图谱”等单个关键词。
+
+例如，“只根据 README 回答”应该路由到 VECTOR；“只沿 Neo4j 关系查”应该路由到 GRAPH；“先查 README，再沿 Neo4j 验证”则应该路由到 HYBRID。
+
+双证据表达还包括“文档内容与关系路径两个角度”“文字证据负责说明功能，图谱证据负责说明上下游”“别只看文档，也别只看图谱，两边都用”等自然语言形式。
+
+---
+
+## 10. Query Rewrite
+
+Query Rewrite 用于在原始问题表达不清楚、召回不足或需要更适合检索的表述时，对查询进行改写。
+
+它的目标不是改变用户意图，而是把问题改造成更适合知识库检索的形式。例如，用户可能使用口语化表达、代词或上下文省略，Query Rewrite 可以尝试生成更完整、更适合向量检索或图谱查询的候选问题。
+
+系统会保留 rewrite_attempted、rewrite_candidate 和 rewritten_query 等状态，用于前端展示和后续评测。
+
+---
+
+## 11. Context Judge
+
+Context Judge 用于判断当前检索到的上下文是否足以回答问题。
+
+如果检索证据已经足够，就可以继续进入回答生成；如果证据明显不足，可以触发 Query Rewrite 或进入其他补充流程。Context Judge 的作用是避免“检索到任意片段就直接让模型回答”。
+
+Context Judge 与 Query Rewrite 的组合可以形成一个循环：先检索，判断是否足够；如果不足，则改写查询并再次检索。
+
+---
+
+## 12. GRAPH 路线
+
+GRAPH 路线主要使用 Neo4j 中的实体和关系。
+
+适合 GRAPH 的问题通常要求回答“谁连接谁”“哪个节点位于上游”“哪个组件触发某个步骤”“两个概念之间是什么关系”“某条边的关系标签是什么”等。
+
+GRAPH 检索的重点不是返回最长的文字解释，而是找到正确实体、关系和三元组。对于关系型问题，直接图谱边往往比单纯文本段落更精确。
+
+---
+
+## 13. Neo4j
+
+项目使用 Neo4j 5.24 作为知识图谱数据库，并通过 Cypher 查询图结构。
+
+文档上传阶段会抽取实体关系，并将这些实体和关系组织成图谱。问答阶段可以根据问题查找相关节点和边。
+
+Neo4j 适合保存明确关系，例如组件之间的依赖、流程上下游、实体属性关系和概念之间的连接。它与 Chroma 的职责不同：Chroma 更擅长文本语义相似度，Neo4j 更擅长结构化关系查询。
+
+---
+
+## 14. 实体与三元组
+
+知识图谱的基本信息可以表示为三元组：主体、关系、客体。
+
+例如，一个组件通过某种关系连接另一个组件时，可以表示成“组件A -[关系]-> 组件B”。图谱检索的评测重点可以是实体是否命中、关系是否正确以及完整三元组是否命中。
+
+项目已经对关系提取与规范化进行过优化，包括大小写不敏感实体匹配和关系查询。
+
+---
+
+## 15. HYBRID 路线
+
+HYBRID 同时调用 Vector Retrieval 和 Graph Retrieval。
+
+它适合需要两类证据的问题：文本片段用于解释定义、背景、配置或机制；图谱用于说明实体连接、依赖、上下游或关系路径。
+
+HYBRID 并不是“问题复杂就自动使用”。如果用户只是问两个实体之间的关系，即使可以用文字解释，也优先 GRAPH。只有用户明确需要文本证据和图谱证据共同完成回答时，才应该选择 HYBRID。
+
+---
+
+## 16. DIRECT 路线
+
+DIRECT 用于不依赖项目知识库的信息处理任务。
+
+典型 DIRECT 包括寒暄、感谢、告别、简单翻译、简单算术、轻量文本创作、大小写转换和文本拆分。
+
+DIRECT 的主要工程意义是避免所有用户输入都触发向量数据库、Neo4j 或 LLM Router，从而减少不必要的检索开销。
+
+---
+
+## 17. Answer Generation
+
+Answer Generation 是检索流程的下游步骤。
+
+VECTOR 路线会把向量检索证据提供给回答生成；GRAPH 路线会提供图谱关系证据；HYBRID 会同时提供文本和图谱信息。
+
+最终回答生成需要关注正确性与忠实性。回答不能因为模型“知道一些通用常识”就脱离当前检索证据随意补充项目事实。
+
+---
+
+## 18. Safe Refusal
+
+当知识库中没有足够证据时，系统应该避免编造答案。
+
+Safe Refusal 的目标是区分“没有检索到答案”和“答案就是否定”。如果项目文档没有提供某个事实，例如真实营业收入、付费用户数、线上 QPS、生产环境月账单或实际 GPU 型号，系统应该说明当前知识库未提供，而不是生成看起来合理的数字。
+
+因此 Safe Refusal 更适合在 Context Judge 和 Answer Evaluation 阶段测试，而不是单独用向量数据库是否返回 Top-K 来判断。
+
+---
+
+## 19. SSE 流式响应
+
+后端使用 FastAPI，并通过 SSE 提供流式响应。
+
+SSE 让前端可以逐步接收回答内容和流程状态，而不是等待整个回答完成后一次性返回。
+
+当前前端还可以展示 Router、Vector/Graph Retrieval、Context Judge、Query Rewrite 和回答生成等流程信息，使用户能够看到一次问题处理经过了哪些步骤。
+
+---
+
+## 20. 前端技术栈
+
+前端使用 Vue 3、Vite、Pinia 和 ECharts。
+
+Vue 3 负责界面组件，Vite 负责前端构建与开发环境，Pinia 用于状态管理，ECharts 用于图形化展示。
+
+项目包含对话窗口、侧边栏和知识图谱可视化等组件。前端通过后端 API 与 RAG 和 Agent 服务交互，并接收 SSE 流式消息。
+
+---
+
+## 21. 后端技术栈
+
+后端使用 FastAPI。
+
+后端目录中的 app/api 负责接口路由，app/services 负责核心业务逻辑，app/utils 负责文档解析和切块等工具。
+
+RAG、知识图谱、Agent Router、Query Rewrite、Context Judge 和检索服务都位于后端逻辑中。
+
+---
+
+## 22. SQLite
+
+项目使用 SQLite 保存会话相关数据。
+
+SQLite 与 Chroma 和 Neo4j 承担不同职责。Chroma 负责向量知识库，Neo4j 负责实体关系图谱，SQLite 用于会话存储。
+
+---
+
+## 23. LLM
+
+项目使用 DeepSeek API，并通过 OpenAI 兼容接口调用。
+
+LLM 用于回答生成，也用于部分需要语义判断的 Router fallback、Query Rewrite 或其他推理步骤。
+
+由于当前 Router 已经加入确定性 Evidence Source Parser 和规则判断，大量简单请求不需要调用 LLM Router。
+
+---
+
+## 24. Docker 与 Docker Compose
+
+项目支持 Docker 和 Docker Compose 一键部署。
+
+根目录中的 docker-compose.yml 用于编排 frontend、backend 和 neo4j。前端和后端分别有自己的 Dockerfile，前端还提供 nginx.conf 作为生产环境反向代理配置。
+
+Docker Compose 的目标是降低本地部署成本，使前端、后端和 Neo4j 可以以统一方式启动。
+
+---
+
+## 25. Docker 启动流程
+
+推荐部署方式是先安装 Docker Desktop，然后克隆项目仓库。
+
+进入 agentic-rag-platform 目录后，需要复制 .env.example 为 .env，并填写 LLM_API_KEY 和 NEO4J_PASSWORD。SERPER_API_KEY 是可选配置。
+
+完成环境变量后，执行 docker compose up --build。首次构建需要下载 Python、Node、Neo4j 镜像，以及 sentence-transformers 相关依赖，因此耗时可能较长。
+
+---
+
+## 26. Docker 服务地址
+
+Docker Compose 构建完成后，前端页面使用 http://localhost。
+
+后端 FastAPI 文档位于 http://localhost:8000/docs。
+
+Neo4j 管理界面位于 http://localhost:7474。
+
+项目通过 Docker volume 持久化向量库、会话记录、图谱数据和 Agent 生成文件，因此容器重启后这些数据不会自动丢失。
+
+---
+
+## 27. 本地开发模式
+
+如果需要修改代码和逐步调试，可以使用本地开发模式，而不是直接使用 Docker Compose。
+
+README 中指出，本地开发的具体步骤分别记录在 backend/README.md 和 frontend/README.md。
+
+本地开发模式下，Neo4j 需要单独通过 Docker 启动，不经过根目录的一键 docker-compose 流程。
+
+---
+
+## 28. 项目目录结构
+
+项目根目录包含 backend、frontend、docker-compose.yml 和 LICENSE。
+
+backend 是 FastAPI 后端，其中 app/api 负责接口路由，app/services 负责 RAG、知识图谱和 Agent 核心业务逻辑，app/utils 负责文档解析和切块。
+
+frontend 是 Vue 3 前端，其中 src/components 包含对话窗口、侧边栏和图谱可视化等组件，src/stores 用于 Pinia 状态管理。
+
+---
+
+## 29. 项目开发阶段
+
+项目按照最小可用到逐步扩展的方式完成。
+
+第一阶段是基础 RAG，包括文档解析、切块、向量检索和带引用回答。
+
+第二阶段加入 Vue 3 对话式前端、流式输出和多会话管理。
+
+第三阶段加入 Neo4j、图谱增强检索和知识图谱可视化。
+
+第四阶段加入 Agent 工具调用，包括知识库检索、联网搜索和报告文件生成。
+
+第五阶段加入 Docker Compose 一键部署。
+
+---
+
+## 30. Agent 工具调用
+
+Agent 模式允许模型根据任务判断是否需要调用工具。
+
+README 明确提到的 Agent 能力包括：检索知识库、联网搜索以及生成可下载的报告文件。
+
+Agent 工具调用与普通 RAG 的区别是，普通 RAG 主要围绕知识库证据回答，而 Agent 模式可以根据任务决定是否执行额外动作。
+
+---
+
+## 31. 联网搜索
+
+README 表明 Agent 模式支持联网搜索。
+
+SERPER_API_KEY 是可选环境变量，说明联网搜索能力可以按配置启用。
+
+本知识库没有提供具体搜索供应商以外的生产调用量、搜索费用或线上服务等级，因此这些信息不应该被系统自行补充。
+
+---
+
+## 32. 引用来源
+
+项目的基础 RAG 目标之一是生成带引用来源的回答。
+
+向量检索结果中保存 filename 和 chunk_index，使系统可以追踪证据来自哪个文档、哪一个块。
+
+后续回答评测可以检查最终答案是否忠实于检索到的片段，以及引用来源是否与实际证据一致。
+
+---
+
+## 33. Retrieval Evaluation
+
+Vector Retrieval 的核心评测指标可以包括 Hit@1、Hit@3、Hit@5 和 MRR。
+
+Hit@K 判断正确的 Gold Chunk 是否出现在前 K 个结果中。MRR 根据第一个正确结果的位置计算倒数排名，再对所有问题取平均。
+
+为了让这些指标有意义，知识库必须包含多个真实 chunks，而且 Gold Chunk 必须在评测前独立标注，不能把系统当前检索第一名直接当成 Gold。
+
+---
+
+## 34. Graph Retrieval Evaluation
+
+Graph Retrieval 可以评测 Entity Hit Rate、Relation Hit Rate 和 Triple Hit Rate。
+
+Entity Hit Rate 判断正确实体是否出现；Relation Hit Rate 判断关系类型是否命中；Triple Hit Rate 判断主体、关系、客体组成的完整三元组是否正确。
+
+对于图谱问题，Triple Hit Rate 比只检查文本相似度更能反映真正的结构化检索能力。
+
+---
+
+## 35. Query Rewrite Evaluation
+
+Query Rewrite 可以通过“改写前检索”和“改写后检索”的差异评估。
+
+例如，可以比较原始查询的 Hit@3 与 rewritten query 的 Hit@3，并计算 Rewrite Gain。
+
+如果改写后更容易命中正确 Gold Chunk，说明 Query Rewrite 对召回有正向作用；如果改写后偏离原始意图，则可能造成负向影响。
+
+---
+
+## 36. Answer Evaluation
+
+最终回答评测不应该只看语句是否流畅。
+
+重要指标包括 Correctness 和 Faithfulness。Correctness 检查最终结论是否正确；Faithfulness 检查回答中的事实是否都能够被检索证据支持。
+
+对于知识库没有提供的信息，还需要评测 Safe Refusal，确认系统不会生成不存在的项目数据。
+
+---
+
+## 37. 当前未提供的生产信息
+
+当前 README 和项目资料没有提供以下生产事实：
+
+- 2025 年营业收入
+- 当前付费用户数量
+- 上线后的日活用户数
+- 生产环境每秒查询次数峰值
+- 生产环境每月服务器账单
+- 实际线上 GPU 型号
+- 最终部署的具体云服务商
+- 中间信息丢失的准确概率
+- 多轮执行固定增加的毫秒延迟
+- 每百万 token 的项目固定价格
+
+如果用户询问这些信息，正确行为应该是说明当前项目资料未提供，而不是生成具体数字或厂商名称。
+
+---
+
+## 38. 已知的评测原则
+
+开发集、回归集和独立 Holdout 必须区分。
+
+如果根据某个 Holdout 的错误修改了 Router，那么这个 Holdout 就不能继续作为独立泛化测试集，只能作为 Development / Regression Set。
+
+新的独立泛化成绩必须在模型或规则冻结后，用从未参与调参的新 Holdout 只测试一次。
+
+同样的原则也适用于 Retrieval Evaluation：Gold Chunk 应该先标注，再运行正式检索评测，避免用模型自己的检索结果反向定义正确答案。
+
+---
+
+## 39. 项目状态
+
+README 标记当前项目状态为 All Phases Complete。
+
+项目已经完成基础 RAG、Vue 前端、知识图谱融合、Agent 工具调用和 Docker Compose 部署五个阶段。
+
+在功能实现完成后，当前工作的重点已经从“继续增加功能”逐步转向“建立可量化评测体系”，包括 Router、Vector Retrieval、Graph Retrieval、Query Rewrite 和 Answer Evaluation。

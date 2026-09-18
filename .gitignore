@@ -52,3 +52,27 @@ graph_service_entity_match_fixed.py
 
 # Local generated technical reports
 Agentic_RAG_*.docx
+# ==============================
+# Evaluation local artifacts
+# ==============================
+
+# Python cache
+backend/evaluation/__pycache__/
+
+# Generated experiment outputs
+backend/evaluation/results/
+
+# Old Router holdouts
+backend/evaluation/router_holdout.csv
+backend/evaluation/router_holdout_02_final.csv
+backend/evaluation/router_holdout_03_final.csv
+
+# Old Router manual test scripts
+backend/evaluation/test_router_v3_cases_fixed.py
+backend/evaluation/test_router_v4_1_cases.py
+backend/evaluation/test_router_v4_2_cases.py
+backend/evaluation/test_router_v4_3_cases.py
+
+# Intermediate / duplicate vector benchmark
+backend/evaluation/benchmark_vector_retrieval.csv
+backend/evaluation/vector_retrieval_benchmark_v1.xlsx
