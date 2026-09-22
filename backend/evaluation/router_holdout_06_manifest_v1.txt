@@ -1,0 +1,24 @@
+Router Holdout-06 Final Manifest
+=================================
+Purpose: independent evaluation set for frozen Router V5.2
+Router commit: 3d51d92
+Branch: fix/router-v5-2
+
+Dataset
+- rows: 80
+- DIRECT: 20
+- VECTOR: 20
+- GRAPH: 20
+- HYBRID: 20
+- order: deterministically shuffled
+- encoding: UTF-8 with BOM
+
+Evaluation hygiene
+1. Do not tune Router V5.2 against Holdout-06 before the first official run.
+2. Run frozen V5.2 exactly once for the independent score.
+3. Record Accuracy, Macro-F1, per-route metrics, latency, and misclassified IDs.
+4. If code is changed after seeing Holdout-06 errors, call the new version V5.3.
+5. After any V5.3 tuning, Holdout-06 becomes regression/diagnostic only.
+
+SHA256
+7baa677ec04865ce21ee100387ba3ad452fa51f2de28c3db82cc80b3343f7131
