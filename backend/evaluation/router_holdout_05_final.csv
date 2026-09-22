@@ -1,0 +1,81 @@
+﻿id,case_type,question,expected_route
+1,vector_missing_fact,项目文档有没有写生产环境每天处理多少次查询？,VECTOR
+2,graph_relation,Chroma 与 Vector Retrieval 节点之间如何连接？,GRAPH
+3,graph_next_node,Query Rewrite 完成后下一跳是哪一个执行环节？,GRAPH
+4,direct_social,嗨，我只是来打个招呼。,DIRECT
+5,vector_mechanism,为什么 chunk 过大可能影响向量召回？,VECTOR
+6,graph_relation,Reflector 与 Context Judge 在执行链路中如何关联？,GRAPH
+7,hybrid_concept_path,请从文档说明 Actor 的职责，并沿知识图给出 Actor 到 Answer Generation 的后续路径。,HYBRID
+8,direct_creative,写一句不超过十二个字的提交成功提示语。,DIRECT
+9,hybrid_two_sources,文字证据和图谱关系都要用：说明 Vector Store 的功能以及它与 Embedding Service 的连接。,HYBRID
+10,direct_creative,给项目首页写一句很短的欢迎语。,DIRECT
+11,vector_definition,Query Rewrite 在这个系统里的主要作用是什么？,VECTOR
+12,graph_boundary,证据不足时是谁触发查询重写？,GRAPH
+13,direct_transform,把“router planner actor”按空格拆成三个词。,DIRECT
+14,vector_definition,文档切块中的 overlap 是做什么的？,VECTOR
+15,vector_attribute,README 是否提到前端开发服务器使用的端口？,VECTOR
+16,graph_dependency,Answer Generation 的直接上游汇总节点是什么？,GRAPH
+17,vector_attribute,说明材料是否给出了检索充分性阈值的默认值？,VECTOR
+18,hybrid_doc_graph,把 README 对 Chroma 的用途说明和知识图中 Chroma 与 Vector Retrieval 的连接放在一起回答。,HYBRID
+19,vector_missing_fact,项目资料是否说明知识库当前一共有多少份文档？,VECTOR
+20,graph_relation,Planner 和 Actor 在流程中是什么关系？,GRAPH
+21,vector_attribute,项目里默认一次向量检索返回多少条结果？,VECTOR
+22,vector_mechanism,Context Judge 为什么要在生成答案前判断证据是否充分？,VECTOR
+23,hybrid_paraphrase,回答时别只给文字定义，也别只列图节点：请解释 Graph Retrieval 的职责和它通往回答阶段的关系链。,HYBRID
+24,hybrid_paraphrase,请从文字说明和知识图两个来源一起解释 Answer Generation 的作用及其直接上游。,HYBRID
+25,graph_path,Graph Retrieval 的输出沿着什么路径到达 Answer Generation？,GRAPH
+26,graph_boundary,两路检索结果最终在哪个环节汇合？,GRAPH
+27,hybrid_concept_path,用文字资料解释 HYBRID 检索为什么存在，再从图结构说明两条检索分支在哪里重新汇合。,HYBRID
+28,vector_mechanism,为什么检索结果太少可能导致回答证据不足？,VECTOR
+29,graph_next_node,Actor 检索结束以后结果会交给哪个判断环节？,GRAPH
+30,graph_dependency,FastAPI Backend 在服务依赖图中依赖哪些存储组件？,GRAPH
+31,graph_path,从 Agent Router 到 Reflector 中间有哪些节点？,GRAPH
+32,direct_social,收到，改天再聊。,DIRECT
+33,hybrid_two_sources,请把文档对 chunk metadata 的作用说明，与知识图中 Chunk 节点的上下游关系合并回答。,HYBRID
+34,vector_missing_fact,系统说明中是否记录了线上部署机器的内存容量？,VECTOR
+35,vector_missing_fact,文档有没有给出每个用户每天的平均提问次数？,VECTOR
+36,hybrid_doc_graph,一方面用文档解释 Context Judge 的目的，另一方面用图谱说明它在 Actor 之后如何衔接。,HYBRID
+37,hybrid_two_sources,既要参考项目说明中的 rerank 作用，也要根据关系路径说明 rerank 前后分别是什么步骤。,HYBRID
+38,direct_arithmetic,64减19再乘2是多少？,DIRECT
+39,direct_social,谢谢你，先不继续了。,DIRECT
+40,direct_text_task,把“FASTAPI”转换成小写。,DIRECT
+41,vector_definition,什么是检索充分性阈值？,VECTOR
+42,graph_path,从 Vector Retrieval 到最终回答的路径经过哪些步骤？,GRAPH
+43,direct_creative,给文档封面想一个简短口号。,DIRECT
+44,graph_boundary,安全拒答位于回答生成链路的什么位置？,GRAPH
+45,vector_mechanism,为什么 Query Rewrite 不能随意加入原问题没有的新概念？,VECTOR
+46,hybrid_doc_graph,请依据项目说明解释 Planner 的职责，同时结合关系图说明它后面连接哪个执行节点。,HYBRID
+47,vector_project_fact,配置文件是否给出了 Chroma 的持久化路径？,VECTOR
+48,graph_path,从 User Query 到 Answer Generation 之间要经过哪些主要节点？,GRAPH
+49,hybrid_config_relation,请把文档里的 Embedding Service 功能与图结构中的上下游连接一起解释。,HYBRID
+50,hybrid_concept_path,从项目资料解释安全拒答的目的，同时从流程关系中定位它在最终回答之前的哪个位置。,HYBRID
+51,vector_definition,rerank 在检索流程中通常解决什么问题？,VECTOR
+52,graph_next_node,Planner 完成计划后，下一步由哪个节点执行检索？,GRAPH
+53,vector_project_fact,项目说明里有没有写向量模型的名称？,VECTOR
+54,direct_transform,把“neo4j_chroma”里的字母全部改成大写。,DIRECT
+55,hybrid_paraphrase,请把说明文档中对 top_k 的解释，与图谱里 Vector Retrieval 周边节点的连接放进同一个答案。,HYBRID
+56,direct_text_task,"把“API,Router,Graph”按逗号拆开。",DIRECT
+57,direct_text_task,把“vector retrieval”两个单词首字母大写。,DIRECT
+58,direct_arithmetic,250加75再除以5等于几？,DIRECT
+59,vector_project_fact,README 是否说明了后端服务如何启动？,VECTOR
+60,hybrid_doc_graph,请同时参考文字材料对 Query Rewrite 的说明，并结合图谱说明改写后流程会去哪里。,HYBRID
+61,graph_dependency,前端聊天界面接收流式事件时，上游节点是谁？,GRAPH
+62,graph_next_node,Context Judge 判定证据不足后，流程接下来进入哪里？,GRAPH
+63,vector_attribute,系统文档有没有记录支持上传哪些文件类型？,VECTOR
+64,hybrid_paraphrase,我想同时知道 README 如何描述前端，以及系统关系图里前端与流式响应模块怎样连接。,HYBRID
+65,direct_text_task,把“planner;actor;reflector”按分号拆开。,DIRECT
+66,vector_project_fact,文档中有没有记录 Neo4j 使用的 Bolt 地址？,VECTOR
+67,hybrid_two_sources,请综合文档中对 Document Ingestion 的描述和流程图中它到 Chunking 的连接关系。,HYBRID
+68,direct_transform,将“Agentic RAG”翻成中文。,DIRECT
+69,graph_dependency,Embedding Service 的输出连接到哪个存储节点？,GRAPH
+70,graph_boundary,重写后的查询会重新交给哪一个执行模块？,GRAPH
+71,direct_arithmetic,96除以8再加7是多少？,DIRECT
+72,direct_transform,把“Vector Store”全部改成小写。,DIRECT
+73,hybrid_config_relation,用 README 说明 FastAPI Backend 的职责，并从系统图补充它连接的主要组件。,HYBRID
+74,hybrid_concept_path,结合说明材料解释 Reflector 的判断作用，再根据图谱给出证据不足时的后续节点。,HYBRID
+75,direct_arithmetic,18乘5再减14等于多少？,DIRECT
+76,hybrid_config_relation,先确认文档中 SSE 的用途，然后从组件关系中说明流式事件最终送到哪个前端模块。,HYBRID
+77,direct_social,晚上见，今天先聊到这里。,DIRECT
+78,hybrid_config_relation,根据配置说明介绍 Neo4j 服务，再结合服务关系图说明 backend 与它的依赖关系。,HYBRID
+79,direct_creative,为演示页想一句简短的结束语。,DIRECT
+80,graph_relation,Neo4j 与 Graph Retrieval 在系统图里是什么关系？,GRAPH
