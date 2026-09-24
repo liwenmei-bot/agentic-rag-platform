@@ -11,6 +11,7 @@ Agent 工具集。
 而是"说它想用哪个工具、传什么参数"，代码负责真正执行，再把结果喂回去给模型。
 """
 from pathlib import Path
+from uuid import uuid4
 
 import requests
 
@@ -65,6 +66,31 @@ TOOL_SCHEMAS = [
 ]
 
 
+class ToolError(Exception):
+    """An expected tool failure that can be safely returned to the model."""
+
+
+def _validate_arguments(tool_name: str, arguments: dict) -> dict:
+    required = {
+        "search_knowledge_base": ("query",),
+        "web_search": ("query",),
+        "generate_report": ("title", "content"),
+    }
+    if tool_name not in required:
+        raise ToolError(f"未知工具：{tool_name}")
+    if not isinstance(arguments, dict):
+        raise ToolError("工具参数必须为 JSON 对象")
+    if set(arguments) - set(required[tool_name]):
+        raise ToolError("工具参数包含未定义的字段")
+    for name in required[tool_name]:
+        value = arguments.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise ToolError(f"缺少有效参数：{name}")
+        if len(value) > (20000 if name == "content" else 500):
+            raise ToolError(f"参数过长：{name}")
+    return arguments
+
+
 def _tool_search_knowledge_base(query: str) -> str:
     hits = vector_search(query, top_k=settings.top_k)
     graph_context = _build_graph_context(query)
@@ -91,7 +117,7 @@ def _tool_web_search(query: str) -> str:
     转而依赖其他信息源或者如实告诉用户。
     """
     if not settings.serper_api_key or settings.serper_api_key == "your_serper_api_key_here":
-        return "联网搜索功能未配置（缺少 SERPER_API_KEY），暂时无法联网搜索，请基于已有信息回答，或提示用户配置该功能。"
+        raise ToolError("联网搜索未配置 SERPER_API_KEY")
 
     try:
         response = requests.post(
@@ -109,8 +135,8 @@ def _tool_web_search(query: str) -> str:
 
         return "\n".join(results) if results else "联网搜索没有找到相关结果。"
 
-    except Exception as e:
-        return f"联网搜索失败：{str(e)}"
+    except requests.RequestException as e:
+        raise ToolError("联网搜索服务暂时不可用") from e
 
 
 def _tool_generate_report(title: str, content: str, workspace_dir: Path) -> dict:
@@ -119,12 +145,12 @@ def _tool_generate_report(title: str, content: str, workspace_dir: Path) -> dict
 
     # 简单清洗文件名，避免标题里的特殊字符导致文件系统报错
     safe_title = "".join(c for c in title if c.isalnum() or c in "-_ ")[:50].strip() or "report"
-    filename = f"{safe_title}.md"
+    filename = f"{safe_title}-{uuid4().hex[:8]}.md"
     file_path = workspace_dir / filename
 
     file_path.write_text(content, encoding="utf-8")
 
-    return {"filename": filename, "path": str(file_path)}
+    return {"filename": filename}
 
 
 def execute_tool(tool_name: str, arguments: dict, workspace_dir: Path):
@@ -135,6 +161,7 @@ def execute_tool(tool_name: str, arguments: dict, workspace_dir: Path):
     - 第一个值会作为 "tool" 角色的消息喂回给 LLM，让它继续推理/生成最终回答
     - 第二个值只有 generate_report 会用到（文件信息），用来告诉前端"生成了一个文件，可以下载"
     """
+    arguments = _validate_arguments(tool_name, arguments)
     if tool_name == "search_knowledge_base":
         result = _tool_search_knowledge_base(arguments.get("query", ""))
         return result, None
@@ -151,5 +178,4 @@ def execute_tool(tool_name: str, arguments: dict, workspace_dir: Path):
         )
         return f"报告已生成：{file_info['filename']}", file_info
 
-    else:
-        return f"未知工具：{tool_name}", None
+    raise ToolError(f"未知工具：{tool_name}")

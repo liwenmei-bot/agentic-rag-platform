@@ -29,6 +29,10 @@ jobs:
         working-directory: backend
         run: python -m py_compile $(find app -name "*.py")
 
+      - name: Run offline backend regression tests
+        working-directory: backend
+        run: python -m pytest -q tests/
+
   frontend-build:
     runs-on: ubuntu-latest
     steps:
@@ -46,3 +50,7 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+      - name: Test SSE parser
+        working-directory: frontend
+        run: npm test

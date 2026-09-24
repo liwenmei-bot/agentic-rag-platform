@@ -293,6 +293,9 @@ function handleKeydown(e) {
               msg.role === 'assistant'
             "
           />
+          <div v-if="msg.pipelineStatus" class="pipeline-status" role="status">
+            {{ msg.pipelineStatus }}
+          </div>
         </div>
       </div>
     </div>
@@ -639,6 +642,14 @@ function handleKeydown(e) {
   color: var(--text-faint);
   margin: 0;
   max-width: 360px;
+}
+
+.pipeline-status {
+  max-width: 760px;
+  margin: 4px auto 12px;
+  padding: 0 var(--space-6);
+  font-size: 12px;
+  color: var(--amber-600);
 }
 
 .input-bar {

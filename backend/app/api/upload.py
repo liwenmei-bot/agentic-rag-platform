@@ -15,7 +15,9 @@ ALLOWED_SUFFIXES = {".pdf", ".docx", ".txt"}
 
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
-    suffix = Path(file.filename).suffix.lower()
+    # UploadFile.filename is client-controlled; keep it inside the uploads directory.
+    filename = Path((file.filename or "").replace("\\", "/")).name
+    suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(
             status_code=400,
@@ -24,13 +26,13 @@ async def upload_document(file: UploadFile = File(...)):
 
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
-    save_path = upload_dir / file.filename
+    save_path = upload_dir / filename
 
     content = await file.read()
     save_path.write_bytes(content)
 
     try:
-        result = ingest_document(str(save_path), file.filename)
+        result = ingest_document(str(save_path), filename)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"文档处理失败: {str(e)}")
 

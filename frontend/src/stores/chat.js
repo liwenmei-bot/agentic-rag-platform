@@ -13,6 +13,7 @@ function makeBaseMessage(role, content = '') {
     ragSteps: [],
     retrievalInfo: null,
     originalQuestion: '',
+    pipelineStatus: '',
 
     // Planner / Actor / Reflector explicit trace
     planner: null,
@@ -124,7 +125,7 @@ function buildRagSteps(message) {
   })
 
   // Backward compatibility: if only retrieval_info exists, still show Actor.
-  if (actorTrace.length === 0 && info) {
+  if (actorTrace.length === 0 && info?.completed) {
     steps.push({
       key: 'actor-fallback',
       label: 'Actor',
@@ -148,7 +149,7 @@ function buildRagSteps(message) {
   })
 
   // Backward compatibility: if no explicit reflector event exists.
-  if (reflectionHistory.length === 0 && info) {
+  if (reflectionHistory.length === 0 && info?.completed) {
     steps.push({
       key: 'reflector-fallback',
       label: 'Reflector / Context Judge',
@@ -238,6 +239,7 @@ export const useChatStore = defineStore('chat', {
     },
 
     async switchSession(sessionId) {
+      if (this.isStreaming) return
       this.currentSessionId = sessionId
       const rawMessages = await api.getSessionMessages(sessionId)
 
@@ -291,6 +293,8 @@ export const useChatStore = defineStore('chat', {
     async sendMessage(question) {
       if (!question.trim() || this.isStreaming) return
       if (!this.currentSessionId) await this.startNewSession()
+      const sessionId = this.currentSessionId
+      const mode = this.chatMode
 
       const userMessage = makeBaseMessage('user', question)
       this.messages.push(userMessage)
@@ -302,9 +306,18 @@ export const useChatStore = defineStore('chat', {
       this.isStreaming = true
 
       try {
-        if (this.chatMode === 'knowledge') {
+        if (mode === 'knowledge') {
           // Basic RAG：只做一次 Chroma 检索，不展示 Agent Trace。
-          await api.streamBasicChat(this.currentSessionId, question, (event) => {
+          await api.streamBasicChat(sessionId, question, (event) => {
+            if (event.type === 'stage') {
+              assistantMessage.pipelineStatus = '正在检索知识库…'
+            } else if (event.type === 'memory') {
+              assistantMessage.pipelineStatus = '正在检索知识库…'
+            } else if (event.type === 'basic_info') {
+              assistantMessage.pipelineStatus = '正在生成回答…'
+            } else if (event.type === 'done') {
+              assistantMessage.pipelineStatus = ''
+            }
             if (event.type === 'sources') {
               assistantMessage.sources = event.data || []
             } else if (event.type === 'content') {
@@ -312,10 +325,32 @@ export const useChatStore = defineStore('chat', {
             }
           })
 
-        } else if (this.chatMode === 'agentic') {
+        } else if (mode === 'agentic') {
           // Agentic RAG：Router V5 -> Planner -> Actor -> Reflector -> Rewrite/Retry。
-          await api.streamAgenticChat(this.currentSessionId, question, (event) => {
-            if (event.type === 'planner') {
+          await api.streamAgenticChat(sessionId, question, (event) => {
+            if (event.type === 'stage') {
+              const labels = {
+                memory: '正在读取会话上下文…',
+                router: '正在选择检索路线…',
+                actor: `正在执行第 ${event.data?.attempt || 1} 轮检索…`,
+                reflector: '正在判断证据是否充分…',
+                rewrite: '正在改写检索问题…',
+                answer: '正在生成回答…',
+              }
+              assistantMessage.pipelineStatus = labels[event.data?.stage] || ''
+            } else if (event.type === 'router') {
+              assistantMessage.retrievalInfo = { ...event.data }
+              rebuildRagSteps(assistantMessage)
+            } else if (event.type === 'memory') {
+              assistantMessage.resolvedQuestion = event.data?.resolved_question
+            } else if (event.type === 'rewrite') {
+              assistantMessage.retrievalInfo = {
+                ...assistantMessage.retrievalInfo,
+                rewrite_attempted: true,
+                rewrite_candidate: event.data?.candidate,
+              }
+              rebuildRagSteps(assistantMessage)
+            } else if (event.type === 'planner') {
               assistantMessage.planner = event.data || null
               rebuildRagSteps(assistantMessage)
 
@@ -333,7 +368,7 @@ export const useChatStore = defineStore('chat', {
               rebuildRagSteps(assistantMessage)
 
             } else if (event.type === 'retrieval_info') {
-              assistantMessage.retrievalInfo = event.data || null
+              assistantMessage.retrievalInfo = event.data ? { ...event.data, completed: true } : null
 
               if (!assistantMessage.planner && event.data?.planner) {
                 assistantMessage.planner = event.data.planner
@@ -359,6 +394,7 @@ export const useChatStore = defineStore('chat', {
               assistantMessage.content += event.data || ''
 
             } else if (event.type === 'done') {
+              assistantMessage.pipelineStatus = ''
               finishGenerateStep(assistantMessage)
             }
           })
@@ -368,26 +404,27 @@ export const useChatStore = defineStore('chat', {
 
         } else {
           // 旧 Tool Agent：保留 knowledge_search / web_search / generate_report 等能力。
-          await api.streamToolAgentChat(this.currentSessionId, question, (event) => {
+          await api.streamToolAgentChat(sessionId, question, (event) => {
             if (event.type === 'tool_call') {
               assistantMessage.toolSteps.push({
                 name: event.data.name,
+                id: event.data.id,
                 status: 'calling',
                 result: '',
               })
             } else if (event.type === 'tool_result') {
               const step = [...assistantMessage.toolSteps]
                 .reverse()
-                .find((s) => s.name === event.data.name && s.status === 'calling')
+                .find((s) => s.id === event.data.id && s.status === 'calling')
 
               if (step) {
-                step.status = 'done'
+                step.status = event.data.ok === false ? 'failed' : 'done'
                 step.result = event.data.result
               }
             } else if (event.type === 'file') {
               assistantMessage.files.push({
                 filename: event.data.filename,
-                downloadUrl: `/files/${this.currentSessionId}/${event.data.filename}`,
+                downloadUrl: `/files/${sessionId}/${event.data.filename}`,
               })
             } else if (event.type === 'content') {
               assistantMessage.content += event.data || ''
@@ -395,14 +432,15 @@ export const useChatStore = defineStore('chat', {
           })
         }
 
-        const session = this.sessions.find((s) => s.id === this.currentSessionId)
+        const session = this.sessions.find((s) => s.id === sessionId)
         if (session && session.title === '新对话') {
           session.title = question.slice(0, 20)
         }
       } catch (e) {
-        assistantMessage.content = '抱歉，回答生成失败，请检查后端服务是否正常运行。'
+        assistantMessage.content = `本轮失败，未保存到会话。原因：${e.message || '请检查后端服务'}`
+        assistantMessage.pipelineStatus = ''
 
-        if (this.chatMode === 'agentic') {
+        if (mode === 'agentic') {
           const generateStep = assistantMessage.ragSteps.find((item) => item.key === 'generate')
           if (generateStep) {
             generateStep.status = 'warning'

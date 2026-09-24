@@ -7,14 +7,13 @@ Embedding 服务：把文本转成向量。
 """
 from functools import lru_cache
 
-from sentence_transformers import SentenceTransformer
-
 from app.core.config import settings
 
 
 @lru_cache(maxsize=1)
-def get_embedding_model() -> SentenceTransformer:
+def get_embedding_model():
     """懒加载 + 缓存模型实例，避免每次调用都重新加载模型（很耗时）。"""
+    from sentence_transformers import SentenceTransformer
     return SentenceTransformer(settings.embedding_model_name)
 
 
