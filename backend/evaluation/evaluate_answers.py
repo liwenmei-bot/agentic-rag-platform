@@ -28,26 +28,28 @@ def _json_field(value, default):
 
 
 def _graph_relation_match(gold: dict, evidence: list) -> bool | None:
-    """Match the directed Gold triple against actual graph evidence, not source labels.
-
-    A missing Gold relation is unscorable. Keep the comparison literal so
-    differences between benchmark labels and stored edge types remain visible.
-    """
+    """Require every directed Gold triple to appear in graph evidence."""
     relation = (gold.get("gold_relation") or "").strip()
     if gold.get("expected_route", "").lower() not in {"graph", "hybrid"} or not relation:
         return None
-    parts = [part.strip().casefold() for part in relation.split("|")]
-    if len(parts) != 3 or not all(parts):
+
+    expected = [
+        tuple(part.strip().casefold() for part in triple.split("|"))
+        for triple in relation.split(";") if triple.strip()
+    ]
+    if not expected or any(len(triple) != 3 or not all(triple) for triple in expected):
         return None
-    target = tuple(parts)
+
+    actual = set()
     for item in evidence if isinstance(evidence, list) else []:
         if not isinstance(item, dict) or item.get("filename") != "知识图谱":
             continue
         for line in str(item.get("content") or "").splitlines():
             match = TRIPLE.fullmatch(line)
-            if match and tuple(part.strip().casefold() for part in match.groups()) == target:
-                return True
-    return False
+            if match:
+                actual.add(tuple(part.strip().casefold() for part in match.groups()))
+
+    return all(triple in actual for triple in expected)
 
 
 def score_case(gold: dict, prediction: dict) -> dict:
@@ -100,6 +102,9 @@ def summarize(rows: list[dict]) -> dict:
     judged = [r["judge"] for r in valid if isinstance(r["judge"], dict) and "correct" in r["judge"]]
     faithful = [j["faithful"] for j in judged if isinstance(j.get("faithful"), bool)]
     knowledge = [row for row in rows if row["knowledge_required"]]
+    answered_knowledge = [
+        row for row in knowledge if not row["refusal_expected"] and not row["refused"]
+    ]
     direct = [row for row in rows if not row["knowledge_required"]]
     unanswerable = [row for row in rows if row["refusal_expected"]]
     answerable = [row for row in rows if not row["refusal_expected"]]
@@ -113,6 +118,7 @@ def summarize(rows: list[dict]) -> dict:
         "graph_relation_scored_count": sum(r["graph_relation_match"] is not None and not r["error"] for r in rows),
         "graph_relation_match_rate": _mean(rows, "graph_relation_match"),
         "citation_rate_on_knowledge": _mean(knowledge, "citation_present"),
+        "citation_rate_on_answered_knowledge": _mean(answered_knowledge, "citation_present"),
         "false_citation_rate_on_direct": _mean(direct, "citation_present"),
         "unanswerable_refusal_rate": _mean(unanswerable, "refused"),
         "answerable_overrefusal_rate": _mean(answerable, "refused"),
