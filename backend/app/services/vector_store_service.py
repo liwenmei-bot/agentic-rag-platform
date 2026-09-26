@@ -9,8 +9,6 @@
 
 from functools import lru_cache
 
-import chromadb
-
 from app.core.config import settings
 from app.services.embedding_service import embed_query, embed_texts
 
@@ -19,7 +17,8 @@ COLLECTION_NAME = "documents"
 
 
 @lru_cache(maxsize=1)
-def get_chroma_client() -> chromadb.ClientAPI:
+def get_chroma_client():
+    import chromadb
     return chromadb.PersistentClient(path=settings.chroma_persist_dir)
 
 

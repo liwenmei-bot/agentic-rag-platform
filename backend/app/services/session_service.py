@@ -8,7 +8,7 @@
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.config import settings
@@ -21,6 +21,7 @@ def get_db():
     """每次请求开一个连接，用完自动关闭，避免连接泄漏。"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # 让查询结果能用列名访问，比 tuple 索引直观
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
@@ -50,11 +51,12 @@ def init_db() -> None:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             )
         """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages(session_id, created_at)")
 
 
 def create_session(title: str = "新对话") -> dict:
     session_id = str(uuid.uuid4())
-    created_at = datetime.utcnow().isoformat()
+    created_at = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         conn.execute(
             "INSERT INTO sessions (id, title, created_at) VALUES (?, ?, ?)",
@@ -74,20 +76,64 @@ def list_sessions() -> list[dict]:
 def get_session_messages(session_id: str) -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC",
+            "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
             (session_id,),
         ).fetchall()
     return [dict(row) for row in rows]
 
 
+def session_exists(session_id: str) -> bool:
+    with get_db() as conn:
+        return conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone() is not None
+
+
+def get_recent_turns(session_id: str, max_messages: int = 8, max_chars: int = 4000) -> list[dict]:
+    """Read bounded history before adding the current user message."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT role, content FROM messages WHERE session_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (session_id, max_messages),
+        ).fetchall()
+    remaining = max_chars
+    result = []
+    for row in rows:
+        content = row["content"]
+        if not content or remaining <= 0:
+            break
+        content = content[-min(remaining, 1000):]
+        remaining -= len(content)
+        result.append({"role": row["role"], "content": content})
+    return list(reversed(result))
+
+
 def add_message(session_id: str, role: str, content: str, sources: str = "") -> None:
     """role 是 'user' 或 'assistant'。"""
     message_id = str(uuid.uuid4())
-    created_at = datetime.utcnow().isoformat()
+    created_at = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         conn.execute(
             "INSERT INTO messages (id, session_id, role, content, sources, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (message_id, session_id, role, content, sources, created_at),
+        )
+
+
+def add_exchange(session_id: str, question: str, answer: str, sources: str = "") -> None:
+    """Commit a complete turn at once; failed or disconnected streams leave no half-turn."""
+    created_at = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        for role, content, source_value in (
+            ("user", question, ""),
+            ("assistant", answer, sources),
+        ):
+            conn.execute(
+                "INSERT INTO messages (id, session_id, role, content, sources, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), session_id, role, content, source_value, created_at),
+            )
+        conn.execute(
+            "UPDATE sessions SET title = ? WHERE id = ? AND title = '新对话'",
+            (question[:20], session_id),
         )
 
 

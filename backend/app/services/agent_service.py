@@ -18,9 +18,12 @@ from pathlib import Path
 from openai import OpenAI
 
 from app.core.config import settings
-from app.services.agent_tools import TOOL_SCHEMAS, execute_tool
+from app.services.agent_tools import TOOL_SCHEMAS, ToolError, execute_tool
 
-_llm_client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+_llm_client = OpenAI(
+    api_key=settings.llm_api_key, base_url=settings.llm_base_url,
+    timeout=30, max_retries=2,
+)
 
 AGENT_SYSTEM_PROMPT = """你是一个能自主使用工具完成任务的智能助手。你可以：
 1. 使用 search_knowledge_base 检索用户上传的文档知识库
@@ -33,12 +36,15 @@ AGENT_SYSTEM_PROMPT = """你是一个能自主使用工具完成任务的智能�
 - 每次工具调用后，根据返回结果判断下一步该做什么。
 - 最终回答时，清楚说明信息来源；如果生成了文件，明确告诉用户文件已生成。
 - 工具调用失败或没有结果时，如实告知用户，不要编造。
+- 历史对话只用于理解用户的指代；涉及知识库事实时仍需调用工具核实。
 """
 
 MAX_TOOL_ITERATIONS = 5
+MAX_TOOL_CALLS = 8
+MAX_TOOL_RESULT_CHARS = 3000
 
 
-def run_agent(question: str, workspace_dir: Path):
+def run_agent(question: str, workspace_dir: Path, history: list[dict] | None = None):
     """
     生成器函数，逐步 yield 出 Agent 执行过程中的各类事件，供 SSE 推送给前端：
     - tool_call：模型决定调用某个工具
@@ -48,10 +54,16 @@ def run_agent(question: str, workspace_dir: Path):
     """
     messages = [
         {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+        *[
+            {"role": item["role"], "content": item["content"]}
+            for item in (history or []) if item["role"] in {"user", "assistant"}
+        ],
         {"role": "user", "content": question},
     ]
 
     reached_limit = True
+    total_calls = 0
+    seen_calls = set()
 
     # 第一段循环：处理工具调用，直到模型不再要求调用工具，或者达到循环上限
     for _ in range(MAX_TOOL_ITERATIONS):
@@ -82,16 +94,34 @@ def run_agent(question: str, workspace_dir: Path):
 
         for tool_call in message.tool_calls:
             tool_name = tool_call.function.name
+            raw_arguments = tool_call.function.arguments or "{}"
             try:
-                arguments = json.loads(tool_call.function.arguments)
-            except json.JSONDecodeError:
-                arguments = {}
+                arguments = json.loads(raw_arguments)
+            except (TypeError, json.JSONDecodeError):
+                arguments = None
 
-            yield {"type": "tool_call", "data": {"name": tool_name, "arguments": arguments}}
+            yield {"type": "tool_call", "data": {"name": tool_name, "id": tool_call.id}}
+            signature = (tool_name, raw_arguments)
+            file_info = None
+            ok = True
+            if total_calls >= MAX_TOOL_CALLS:
+                ok, result_text = False, "已达到工具调用上限，请基于现有结果作答。"
+            elif signature in seen_calls:
+                ok, result_text = False, "重复的工具调用已停止，请使用已有结果或说明失败。"
+            else:
+                seen_calls.add(signature)
+                total_calls += 1
+                try:
+                    result_text, file_info = execute_tool(tool_name, arguments, workspace_dir)
+                except ToolError as e:
+                    ok, result_text = False, str(e)
+                except Exception:
+                    ok, result_text = False, "工具运行失败，请如实告知用户。"
 
-            result_text, file_info = execute_tool(tool_name, arguments, workspace_dir)
-
-            yield {"type": "tool_result", "data": {"name": tool_name, "result": result_text[:300]}}
+            result_text = str(result_text)[:MAX_TOOL_RESULT_CHARS]
+            yield {"type": "tool_result", "data": {
+                "name": tool_name, "id": tool_call.id, "ok": ok, "result": result_text[:300],
+            }}
             if file_info:
                 yield {"type": "file", "data": file_info}
 
@@ -100,9 +130,11 @@ def run_agent(question: str, workspace_dir: Path):
                 "tool_call_id": tool_call.id,
                 "content": result_text,
             })
+        if total_calls >= MAX_TOOL_CALLS:
+            break
 
     if reached_limit:
-        yield {"type": "content", "data": "（已达到最大工具调用次数，基于目前已获得的信息回答）"}
+        messages.append({"role": "system", "content": "工具调用已经结束。只用已获得的信息回答；证据不足时明确说明。"})
 
     # 最后一步：不再传 tools 参数，强制模型只生成文字回答，并且用流式方式输出
     stream = _llm_client.chat.completions.create(

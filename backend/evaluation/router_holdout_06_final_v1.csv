@@ -1,0 +1,81 @@
+﻿id,case_type,question,expected_route
+1,graph_relation,Embedding Service 与 Chroma 在系统关系中怎样连接？,GRAPH
+2,vector_doc_fact,文档是否说明 Chroma 的持久化目录？,VECTOR
+3,hybrid_dual,我既想知道 README 对 SSE 的功能说明，也想知道系统图里 SSE 最终连到哪个前端模块。,HYBRID
+4,vector_doc_fact,项目说明里有没有写默认的 chunk overlap 大小？,VECTOR
+5,graph_next,Actor 返回检索结果以后，流程接着进入哪个判断节点？,GRAPH
+6,direct_smalltalk,先这样，晚点再继续。,DIRECT
+7,graph_relation,Planner 与 Actor 在执行链路中是什么上下游关系？,GRAPH
+8,hybrid_dual,先查文档里 rerank 的作用，再看关系网络中 rerank 前后分别接什么步骤。,HYBRID
+9,graph_next,Router 判定为 VECTOR 后，请求会交给哪个检索节点？,GRAPH
+10,direct_transform,把“graph/retrieval”按斜杠拆开。,DIRECT
+11,vector_doc_fact,配置里是否给出了检索充分性阈值？,VECTOR
+12,direct_math,37乘3再减21等于多少？,DIRECT
+13,direct_transform,把“Agent Router”全部转换成大写。,DIRECT
+14,hybrid_dual,请综合文档对 HYBRID 检索的解释，以及图结构中两条检索分支重新汇合的位置。,HYBRID
+15,vector_mechanism,Query Rewrite 为什么要尽量保留原问题语义？,VECTOR
+16,hybrid_dual,从项目资料解释安全拒答的目的，并从流程关系中补充它位于回答链路的哪里。,HYBRID
+17,vector_mechanism,SSE 在这个系统里主要承担什么用途？,VECTOR
+18,graph_relation,Chroma 与 Vector Retrieval 节点在知识图中是什么关系？,GRAPH
+19,direct_translate,把“streaming answer”翻译成中文。,DIRECT
+20,hybrid_dual,先从文字材料确认 Chroma 的用途，然后从图谱关系补充它与 Vector Retrieval 的连接。,HYBRID
+21,direct_math,84除以7再加13是多少？,DIRECT
+22,direct_math,180减48再除以6是多少？,DIRECT
+23,vector_mechanism,为什么文档切块过小可能损害检索效果？,VECTOR
+24,graph_path,Agent Router 之后到 Reflector 之前依次经过哪些节点？,GRAPH
+25,graph_next,Reflector 判断通过后，接下来进入哪个回答环节？,GRAPH
+26,graph_relation,Graph Retrieval 的结果与 Reflector 之间如何衔接？,GRAPH
+27,direct_smalltalk,收到，谢谢你的说明。,DIRECT
+28,hybrid_dual,从说明材料确认 Query Rewrite 的作用，然后从流程图定位改写后请求回到哪里。,HYBRID
+29,graph_path,从 User Query 到 Agent Router 之间有没有其他节点？,GRAPH
+30,vector_mechanism,为什么检索上下文太少会影响最终回答？,VECTOR
+31,graph_next,Query Rewrite 完成改写后会重新进入哪个执行环节？,GRAPH
+32,hybrid_dual,说明材料负责解释 Embedding Service 的功能，关系图负责说明它的上下游，请一起回答。,HYBRID
+33,hybrid_dual,一方面根据项目说明解释 Planner 做什么，另一方面沿知识图说明 Planner 后面由谁执行。,HYBRID
+34,hybrid_dual,请同时用项目文档和知识图回答：Reflector 的判断职责是什么，证据不足时又会流向哪里？,HYBRID
+35,vector_mechanism,rerank 一般为什么放在初次召回之后？,VECTOR
+36,direct_copy,为上传成功页面写一句简短提示语。,DIRECT
+37,graph_path,Vector Retrieval 到 Answer Generation 之间经过哪些环节？,GRAPH
+38,graph_next,Planner 生成计划以后，下一步会把任务交给谁？,GRAPH
+39,vector_doc_fact,项目资料是否说明一次向量检索默认取多少条候选？,VECTOR
+40,direct_copy,给代码提交完成写一句很短的提示。,DIRECT
+41,direct_smalltalk,辛苦了，今天先到这里。,DIRECT
+42,hybrid_dual,先确认配置说明里的 Neo4j 服务用途，再根据服务图说明 backend 与 Neo4j 的依赖连接。,HYBRID
+43,graph_relation,FastAPI Backend 和 SSE Stream 在组件图里是什么关系？,GRAPH
+44,vector_doc_fact,README 是否记录了后端默认监听端口？,VECTOR
+45,hybrid_dual,用 README 里的前端说明回答其职责，同时根据组件关系说明前端和流式响应模块如何相连。,HYBRID
+46,vector_mechanism,Basic RAG 和 Agent 模式在检索流程上有什么功能差异？,VECTOR
+47,graph_relation,Frontend Chat View 的上游流式模块是哪一个？,GRAPH
+48,graph_position,安全拒答在最终回答流程中处于哪个环节？,GRAPH
+49,hybrid_dual,请把说明文档中 top_k 的含义和知识图里 Vector Retrieval 周边的节点关系综合起来。,HYBRID
+50,direct_translate,“知识库检索”用英文怎么说？,DIRECT
+51,direct_transform,把“FASTAPI BACKEND”全部改成小写。,DIRECT
+52,graph_path,HYBRID 的两路检索结果最终在哪里重新合流？,GRAPH
+53,hybrid_dual,把 README 对 FastAPI Backend 的职责描述，与系统关系图里的主要连接组件放进同一个答案。,HYBRID
+54,vector_doc_fact,README 有没有注明生产环境使用哪种数据库？,VECTOR
+55,vector_doc_fact,配置材料中是否写了 Neo4j 的连接地址？,VECTOR
+56,direct_transform,把“vector-store”里的连字符替换成空格。,DIRECT
+57,direct_smalltalk,早，今天先简单聊两句。,DIRECT
+58,hybrid_dual,文字证据和关系证据都需要：说明 Chunking 的功能，并给出 Chunk 到 Embedding 的图谱连接。,HYBRID
+59,graph_path,从 Graph Retrieval 沿流程到最终回答要经过哪些节点？,GRAPH
+60,direct_copy,帮我给 README 想一句简短欢迎语。,DIRECT
+61,vector_mechanism,Actor 在 Agentic RAG 流程里负责做什么？,VECTOR
+62,vector_mechanism,Planner 在当前实现中的主要职责是什么？,VECTOR
+63,graph_next,Context Judge 认为证据不足以后，下一步流向哪里？,GRAPH
+64,vector_mechanism,为什么长上下文可能增加延迟和成本？,VECTOR
+65,vector_doc_fact,说明文档有没有写前端如何启动开发服务器？,VECTOR
+66,hybrid_dual,请用文字资料说明 Context Judge 为什么存在，并结合图谱补充它前后的流程关系。,HYBRID
+67,graph_next,Router 判定为 GRAPH 后，下一跳是哪条检索分支？,GRAPH
+68,vector_mechanism,Context Judge 在这个项目里主要解决什么问题？,VECTOR
+69,hybrid_dual,不要只讲定义，也不要只列关系：请把 Graph Retrieval 的职责和它到回答阶段的路径一起说明。,HYBRID
+70,direct_translate,把“retrieval pipeline”翻成中文。,DIRECT
+71,direct_copy,给项目演示页写一句十个字以内的结束语。,DIRECT
+72,graph_relation,Document Ingestion 与 Chunking 在流程里是什么前后关系？,GRAPH
+73,hybrid_dual,先依据项目说明解释 Actor 的职责，再沿关系图说明它后面连接哪些节点。,HYBRID
+74,direct_smalltalk,明白了，改天接着做。,DIRECT
+75,hybrid_dual,一边根据文档解释 Vector Store 的用途，一边根据知识图说明它和 Embedding Service 的连接。,HYBRID
+76,hybrid_dual,既参考文档对 Document Ingestion 的描述，也根据流程图说明它之后如何到达 Chunking。,HYBRID
+77,vector_doc_fact,项目是否记录支持上传哪些文档格式？,VECTOR
+78,vector_doc_fact,文档有没有给出 embedding 模型名称？,VECTOR
+79,hybrid_dual,把文档中对 chunk metadata 的解释与图谱里 Chunk 节点的上下游关系合在一起说明。,HYBRID
+80,direct_transform,"将“Planner,Actor,Reflector”按逗号拆成三项。",DIRECT

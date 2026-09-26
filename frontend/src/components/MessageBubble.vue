@@ -49,9 +49,9 @@ const renderedContent = computed(() => {
       <!-- Agent 工具调用步骤：像"过程日志"一样展示在正文上方 -->
       <div v-if="toolSteps.length" class="tool-steps">
         <div v-for="(step, i) in toolSteps" :key="i" class="tool-step" :class="step.status">
-          <span class="tool-icon">{{ step.status === 'calling' ? '⋯' : '✓' }}</span>
+          <span class="tool-icon">{{ step.status === 'calling' ? '⋯' : step.status === 'failed' ? '!' : '✓' }}</span>
           <span class="tool-name">{{ toolLabel(step.name) }}</span>
-          <span v-if="step.status === 'done'" class="tool-result">{{ step.result }}</span>
+          <span v-if="step.status !== 'calling'" class="tool-result">{{ step.result }}</span>
         </div>
       </div>
 
@@ -309,6 +309,9 @@ const renderedContent = computed(() => {
 }
 .tool-step.calling .tool-icon {
   animation: pulse 1s ease-in-out infinite;
+}
+.tool-step.failed .tool-icon {
+  color: #bb463f;
 }
 @keyframes pulse {
   50% { opacity: 0.3; }

@@ -1,110 +1,99 @@
-# agentic-rag-platform
+# Agentic RAG Platform
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)
-![Vue](https://img.shields.io/badge/Vue-3.5-42b883.svg)
-![Neo4j](https://img.shields.io/badge/Neo4j-5.24-018bff.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Status](https://img.shields.io/badge/Status-All%20Phases%20Complete-brightgreen.svg)
+基于 FastAPI、Vue 3、Chroma、Neo4j 和 SQLite 的本地知识库问答项目。提供三种独立模式：Basic RAG、四路 Router V5.2 的 Agentic RAG、以及可调用知识库搜索、联网搜索和报告生成工具的 Tool Agent。当前完成本地代码与离线回归；真实 LLM、Chroma/Neo4j 联调和在线回答评测需在配置好服务与数据后运行。
 
-一个融合 **RAG 检索、知识图谱、Agent 工具调用** 的智能知识平台，支持 Docker 一键部署。
-参考 [xerrors/Yuxi](https://github.com/xerrors/Yuxi) 等开源项目的架构思路，独立设计并实现。
+> 参考了 [Yuxi](https://github.com/xerrors/Yuxi) 等项目的架构思路；本仓库代码独立实现。项目默认单用户，无鉴权，不适合直接对公网开放。
 
-## 这个项目能做什么
+## 功能与链路
 
-1. **上传文档**（PDF / Word / TXT），系统自动解析、切块、向量化，构建可检索的知识库
-2. **提问**，系统检索相关内容并生成带引用来源的回答，支持流式打字机输出
-3. 上传文档时，系统还会自动**抽取实体关系**，构建可视化的知识图谱；问答时结合图谱关系做更深层的关联推理
-4. 切换到 **Agent 模式**，模型能自主判断是否需要检索知识库、联网搜索、或生成一份可下载的报告文件，并自主执行
+| 模式 | 后端接口 | 流程 |
+| --- | --- | --- |
+| Basic RAG | `POST /api/chat/basic/stream` | 会话消歧 → Chroma 单次检索 → 带文档引用的回答 |
+| Agentic RAG | `POST /api/chat/stream` | 会话消歧 → Router V5.2（DIRECT / VECTOR / GRAPH / HYBRID）→ Planner → Actor → Reflector → 必要时改写并重试 → 回答 |
+| Tool Agent | `POST /api/agent/chat/stream` | 有界会话历史 → LLM 工具选择 → 参数校验 → 工具执行与错误反馈 → 流式回答 |
 
-## 功能演示
+上传 `PDF / DOCX / TXT` 时，系统解析并切块，将向量存入 Chroma，抽取的实体关系写入 Neo4j。对话用 SQLite 保存完整成功轮次。Agentic 模式在 Router、检索、判断和改写**实际执行时**发送 SSE 事件，前端显示进行中的步骤；断流或失败不会保存半轮回答。
 
-<!-- 把测试时的截图放进 docs/screenshots/ 目录，然后取消下面的注释替换成真实图片 -->
-<!--
-| 知识库问答 | 知识图谱可视化 |
-|---|---|
-| ![chat](./docs/screenshots/chat.png) | ![graph](./docs/screenshots/graph.png) |
-
-| Agent 工具调用 | Docker 一键部署 |
-|---|---|
-| ![agent](./docs/screenshots/agent.png) | ![docker](./docs/screenshots/docker.png) |
--->
-
-## 技术栈
-
-| 层 | 技术选型 |
-|---|---|
-| 前端 | Vue 3 · Vite · Pinia · ECharts |
-| 后端 | FastAPI · SSE 流式响应 |
-| 向量检索 | Chroma · sentence-transformers (bge-small-zh) |
-| 知识图谱 | Neo4j · Cypher |
-| 会话存储 | SQLite |
-| LLM | DeepSeek API（OpenAI 兼容接口，可替换为其他厂商） |
-| 部署 | Docker · Docker Compose · Nginx |
-
-## 开发进度
-
-- [x] 第一阶段：基础 RAG 问答（文档解析 → 切块 → 向量检索 → 带引用回答）
-- [x] 第二阶段：Vue 3 对话式前端 + 流式输出 + 多会话管理
-- [x] 第三阶段：知识图谱融合（Neo4j + 图谱增强检索 + 可视化）
-- [x] 第四阶段：Agent 工具调用（知识库检索、联网搜索、生成报告文件）
-- [x] 第五阶段：Docker Compose 一键部署
-
-## 项目结构
-
-```
-agentic-rag-platform/
-├── backend/              # FastAPI 后端：RAG、知识图谱、Agent 全部逻辑
-│   ├── app/
-│   │   ├── api/           # 接口路由
-│   │   ├── services/      # 核心业务逻辑
-│   │   └── utils/         # 文档解析、切块工具
-│   └── Dockerfile
-├── frontend/             # Vue 3 前端
-│   ├── src/
-│   │   ├── components/    # 对话窗口、侧边栏、图谱可视化
-│   │   └── stores/        # Pinia 状态管理
-│   ├── Dockerfile
-│   └── nginx.conf         # 生产环境的反向代理配置
-├── docker-compose.yml     # 一键编排 frontend + backend + neo4j
-└── LICENSE
+```mermaid
+flowchart TD
+    Q["提问 + 当前会话"] --> M["历史消歧"]
+    M --> R["Router V5.2"]
+    R --> P["Planner"]
+    P --> A["Actor 检索"]
+    A --> F["Reflector"]
+    F -->|"证据不足"| W["Rewrite + 再检索"]
+    W --> F
+    F -->|"结束"| G["流式回答 + 引用"]
 ```
 
-## 快速开始：Docker 一键部署（推荐）
+## 本地运行
 
-**前提**：安装好 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。
+需要 Python 3.11、Node 20 和本地 Neo4j。首次 Embedding 加载需要下载 `BAAI/bge-small-zh-v1.5`。分别启动：
 
 ```bash
-git clone https://github.com/liwenmei-bot/agentic-rag-platform.git
-cd agentic-rag-platform
-
+cd backend
+python -m venv venv
+# Windows PowerShell: .\venv\Scripts\Activate.ps1
+# macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env，填入 LLM_API_KEY、NEO4J_PASSWORD（SERPER_API_KEY 可选）
-
-docker compose up --build
+# 编辑 .env：LLM_API_KEY、NEO4J_URI/USER/PASSWORD；SERPER_API_KEY 可选
+uvicorn app.main:app --reload --port 8000
 ```
 
-首次构建会花几分钟（需要下载 Python/Node/Neo4j 镜像，以及 sentence-transformers 依赖的 torch），构建完成后：
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-- 前端页面：**http://localhost**
-- 后端 API 文档：http://localhost:8000/docs
-- Neo4j 管理界面：http://localhost:7474
+前端 `http://localhost:5173`，API 文档 `http://localhost:8000/docs`。另一种本地启动方式是在项目根目录配置 `.env` 后执行 `docker compose up --build`，前端 `http://localhost`；Compose 会启动 Neo4j，数据保存在卷内。Docker 是本地编排配置，不表示项目已上线。
 
-所有数据（向量库、会话记录、图谱数据、Agent 生成的文件）都通过 Docker volume 持久化，容器重启不会丢失。
+## 运行与验证
 
-## 快速开始：本地开发模式
+先创建会话，再发送流式请求：
 
-如果你想修改代码、逐步调试，而不是直接用 Docker 部署，参考各子项目的详细文档：
+```bash
+curl -X POST http://localhost:8000/api/sessions
+curl -N -X POST http://localhost:8000/api/chat/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"替换为创建得到的UUID","question":"文档中 Actor 的作用是什么？"}'
+```
 
-- 后端：[`backend/README.md`](./backend/README.md)
-- 前端：[`frontend/README.md`](./frontend/README.md)
+SSE 使用 `data: {"type":"...","data":...}` 帧。`stage` 为进行中，随后依次可能有 `memory`、`router`、`planner`、`actor`、`reflector`、`rewrite`、`retrieval_info`、`sources`、多帧 `content`、`done`。Tool Agent 另有 `tool_call`、`tool_result`、`file`。服务错误产生 `error`，不会产生成功 `done`。完整字段和时序见 [实现文档](docs/pipeline-memory-evaluation.md)。
 
-本地开发模式下，Neo4j 需要单独用 Docker 起一个容器（不经过 docker-compose），具体步骤同样在 `backend/README.md` 里。
+离线回归（不调用外部 LLM、Chroma 或 Neo4j）：
 
-## 开发历程
+```bash
+cd backend
+python -m pytest -q tests/
+cd ../frontend
+npm test
+npm run build
+```
 
-这个项目从零开始按照"最小可用 → 逐步加功能"的思路分五个阶段完成，每个阶段都有独立的技术验证。感兴趣可以看各阶段目录下的代码演进（通过 git log 查看提交历史），或者查看每个子项目 README 里"已知限制"部分——这些是真实踩过的坑和可以继续优化的方向。
+回答评估复用 `backend/evaluation/benchmark.csv` 中 `review_status=ready` 的题。真实运行需要知识库、图谱和 LLM 已就绪；结果写到 git 忽略的 `backend/evaluation/results/`：
 
-## License
+```bash
+cd backend
+python -m evaluation.evaluate_answers --mode live --limit 20
+python -m evaluation.evaluate_answers --mode score --predictions evaluation/results/answers/answers.csv
+# 可选：调用已配置的模型作参考答案/实际证据判分（产生费用）
+python -m evaluation.evaluate_answers --mode live --limit 20 --judge
+```
 
-本项目基于 [MIT License](./LICENSE) 开源。
+脚本分别报告 route accuracy、来源命中、知识题引用率、拒答/误拒答率、P50/P95 延迟和诊断用关键词召回；`--judge` 才报告回答正确性与证据忠实度，并需人工抽检。**没有运行真实实验时不填写成绩。** Router V5.2 的 Holdout-06 数据和冻结代码保留原样；这个新评估不应被写成 V5.2 的独立 Holdout 成绩。
+
+## 代码与文档
+
+- `backend/app/services/rag_service.py`：Router、检索管线和 SSE 生成。
+- `backend/app/services/memory_service.py`、`session_service.py`：追问消歧、有界历史和 SQLite 完整轮次。
+- `backend/app/services/agent_service.py`、`agent_tools.py`：工具循环、限制和错误回传。
+- `backend/evaluation/evaluate_answers.py`：回答层评估；`backend/tests/` 与 `frontend/tests/`：离线回归。
+- [完整设计、接口和限制](docs/pipeline-memory-evaluation.md) · [简历素材及面试口径](docs/resume-material.md) · [后端开发指南](backend/README.md) · [前端开发指南](frontend/README.md)。
+
+## 边界
+
+本项目仅完成本地代码与离线验证，未验证当前环境的 DeepSeek、Serper、Chroma 模型下载或 Neo4j 实例。会话历史用来消歧，不能代替文档/图谱证据；LLM Judge 是辅助指标。单用户 SQLite 和无鉴权接口需在公开部署前补安全与多用户隔离。图谱事实准确性仍取决于抽取质量与原始文档。
+
+MIT License，见 [LICENSE](LICENSE)。

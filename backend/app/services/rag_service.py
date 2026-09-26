@@ -45,7 +45,10 @@ from app.services.agent_orchestrator import (
 from app.utils.chunking import chunk_text
 from app.utils.parsing import parse_document
 
-_llm_client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+_llm_client = OpenAI(
+    api_key=settings.llm_api_key, base_url=settings.llm_base_url,
+    timeout=30, max_retries=1,
+)
 
 # Prompt 设计要点（对应路线图里提到的"防止模型瞎编"）：
 # 1. 明确要求"只根据资料回答"
@@ -212,6 +215,9 @@ _LIGHT_CREATIVE_PATTERNS = (
     r"^(?:请)?(?:帮我)?(?:写|想|给我想)(?:一句|一条|一个|个)?(?:不超过.{0,10})?(?:简短的|礼貌的)?"
     r".{0,30}(?:祝福|口号|结束语|欢迎语|开场白|问候|鼓励语?)[。.!！]?$",
     r"^(?:请)?(?:帮我)?写一句.{0,50}(?:祝福|问候|鼓励语?|开场白|结束语|欢迎语)[。.!！]?$",
+    # V5.1: short copywriting for a named target (e.g. README) is still DIRECT.
+    r"^(?:请)?(?:帮我)?(?:给|为).{1,40}(?:写|想|生成).{0,30}"
+    r"(?:感谢语|提示语|结束语|结尾语|欢迎语|开场白|口号|文案)[。.!！]?$",
 )
 
 _SIMPLE_TEXT_TASK_PATTERNS = (
@@ -262,22 +268,31 @@ _GRAPH_EVIDENCE_PATTERNS = (
     r"知识图",
     r"neo4j",
     r"关系图",
+    r"系统图",
+    r"流程关系",
+    r"流程图",
+    r"组件图",
+    r"服务图",
+    r"架构图",
     r"图结构",
+    r"图节点",
     r"关系网络",
     r"图谱边",
     r"关系边",
     r"实体关系",
     r"实体连接",
     r"关系路径",
-    r"组件关系(?:网络)?",
+    r"组件关系(?:网络|图)?",
     r"服务依赖",
     r"图(?:里|中|里的|中的).{0,30}(?:关系|连接|节点|路径|边|上游|下游)",
 )
 
 _DUAL_EVIDENCE_CUES = (
     "同时", "结合", "综合", "一起", "一并", "两边", "两个角度",
-    "合起来", "合并", "联合", "放在一起", "放在同一个答案",
-    "一边", "也要", "也需要", "再用", "再从", "再沿", "再去",
+    "一方面", "另一方面", "并从", "并沿", "并结合",
+    "然后从", "都要用", "也别只", "放进同一个答案",
+    "合起来", "合并", "合在", "合到", "联合", "放在一起", "放在同一个答案",
+    "一边", "既", "也查看", "也参考", "也要", "也需要", "再用", "再从", "再沿", "再去",
     "先从", "先查", "先用", "最后合并", "都用", "共同", "分别", "负责",
 )
 
@@ -468,6 +483,9 @@ _EXPLICIT_RELATION_INTENT_PATTERNS = (
     r"连过来", r"连出去", r"怎么连接", r"如何连接",
     r"怎么关联", r"如何关联", r"怎么挂接", r"如何挂接",
     r"归到哪个", r"对应哪个", r"属于什么", r"谁导致", r"谁决定",
+    r"(?:回到|流向|交给|进入|接到|经过)(?:哪一个|哪个|哪一).{0,20}(?:节点|环节|步骤|模块|分支)",
+    r"(?:位于|处于).{0,20}(?:什么|哪个|哪一个|哪一)(?:位置|环节|节点|步骤)",
+    r"(?:接下来|随后|之后|下一步).{0,20}(?:进入|流向|去往|转到|交给).{0,20}(?:哪里|哪儿|哪个|哪一个|哪一|什么)",
 )
 
 _KNOWLEDGE_QUERY_PATTERNS = (
@@ -994,7 +1012,7 @@ def _should_adopt_rewrite(
     return False
 
 
-def run_retrieval_pipeline(question: str) -> dict:
+def stream_retrieval_pipeline(question: str):
     """
     Planner -> Actor -> Reflector 显式化后的 Agentic RAG 检索管线。
 
@@ -1023,10 +1041,13 @@ def run_retrieval_pipeline(question: str) -> dict:
     - Context Judge 判定规则；
     - Query Rewrite 的采用规则。
     """
+    yield {"type": "stage", "data": {"stage": "router", "status": "running"}}
     route, route_reason = _route_query(question)
+    yield {"type": "router", "data": {"route": route, "route_reason": route_reason}}
 
     # Planner 不额外调用 LLM，只根据已经确定的 route 展开执行计划。
     plan = build_plan(route, route_reason=route_reason)
+    yield {"type": "planner", "data": plan.to_dict()}
 
     actor_trace: list[dict] = []
     reflection_history: list[dict] = []
@@ -1041,6 +1062,7 @@ def run_retrieval_pipeline(question: str) -> dict:
             graph_context_available=False,
         ).to_dict()
         reflection_history.append(reflection)
+        yield {"type": "reflector", "data": reflection}
 
         return {
             "route": route,
@@ -1061,13 +1083,16 @@ def run_retrieval_pipeline(question: str) -> dict:
     # ------------------------------------------------------------------
     # Actor round 1: 完全复用原来的 _retrieve(question, route)。
     # ------------------------------------------------------------------
+    yield {"type": "stage", "data": {"stage": "actor", "status": "running", "attempt": 1}}
     hits, graph_context, trace1 = _actor_execute(
         question=question,
         route=route,
         attempt=1,
     )
     actor_trace.append(trace1)
+    yield {"type": "actor", "data": trace1}
 
+    yield {"type": "stage", "data": {"stage": "reflector", "status": "running", "attempt": 1}}
     first_sufficient = _is_context_sufficient(
         hits,
         graph_context,
@@ -1084,6 +1109,7 @@ def run_retrieval_pipeline(question: str) -> dict:
         graph_context_available=bool(graph_context),
     ).to_dict()
     reflection_history.append(first_reflection)
+    yield {"type": "reflector", "data": first_reflection}
 
     rewrite_attempted = False
     rewrite_candidate = None
@@ -1096,20 +1122,24 @@ def run_retrieval_pipeline(question: str) -> dict:
     if not first_sufficient:
         rewrite_attempted = True
 
+        yield {"type": "stage", "data": {"stage": "rewrite", "status": "running"}}
         candidate_query = _rewrite_query(
             question=question,
             hits=hits,
             graph_context=graph_context,
         )
         rewrite_candidate = candidate_query
+        yield {"type": "rewrite", "data": {"candidate": candidate_query}}
 
         if candidate_query and candidate_query.strip() != question.strip():
+            yield {"type": "stage", "data": {"stage": "actor", "status": "running", "attempt": 2}}
             hits2, graph_context2, trace2 = _actor_execute(
                 question=candidate_query,
                 route=route,
                 attempt=2,
             )
             actor_trace.append(trace2)
+            yield {"type": "actor", "data": trace2}
             second_actor_executed = True
 
             # 重要：仍然使用原 _should_adopt_rewrite()，不改变采用标准。
@@ -1126,6 +1156,8 @@ def run_retrieval_pipeline(question: str) -> dict:
 
     # 最终 Reflector 只描述“最终被采用的上下文”，不修改任何检索结果。
     final_question = rewritten_query or question
+    if rewrite_attempted:
+        yield {"type": "stage", "data": {"stage": "reflector", "status": "running", "attempt": 2}}
     final_sufficient = _is_context_sufficient(
         hits,
         graph_context,
@@ -1146,6 +1178,7 @@ def run_retrieval_pipeline(question: str) -> dict:
             graph_context_available=bool(graph_context),
         ).to_dict()
         reflection_history.append(final_reflection)
+        yield {"type": "reflector", "data": final_reflection}
     else:
         final_reflection = first_reflection
 
@@ -1164,6 +1197,16 @@ def run_retrieval_pipeline(question: str) -> dict:
         "reflection": final_reflection,
         "reflection_history": reflection_history,
     }
+
+
+def run_retrieval_pipeline(question: str) -> dict:
+    """Drive the same pipeline without SSE; both modes share identical decisions."""
+    events = stream_retrieval_pipeline(question)
+    while True:
+        try:
+            next(events)
+        except StopIteration as completed:
+            return completed.value
 
 
 def _build_prompt(question: str, hits: list[dict], graph_context: str) -> str:
@@ -1253,7 +1296,7 @@ def basic_answer_question(question: str) -> dict:
     }
 
 
-def stream_basic_answer(question: str):
+def stream_basic_answer(question: str, prompt_question: str | None = None):
     """
     Basic RAG 流式回答。
 
@@ -1262,6 +1305,7 @@ def stream_basic_answer(question: str):
 
     不经过 Router / Planner / Actor / Reflector / Query Rewrite / Neo4j。
     """
+    yield {"type": "stage", "data": {"stage": "vector", "status": "running"}}
     hits = search(question, top_k=settings.top_k)
 
     yield {
@@ -1280,7 +1324,7 @@ def stream_basic_answer(question: str):
         }
         return
 
-    user_prompt = _build_prompt(question, hits, "")
+    user_prompt = _build_prompt(prompt_question or question, hits, "")
     yield {"type": "sources", "data": _sources_from_hits(hits)}
 
     stream = _llm_client.chat.completions.create(
@@ -1317,6 +1361,12 @@ def answer_question(question: str) -> dict:
         "actor_trace": pipeline_result["actor_trace"],
         "reflection": pipeline_result["reflection"],
         "reflection_history": pipeline_result["reflection_history"],
+        # Internal evaluation payload. ChatResponse does not expose document text.
+        "evidence": [
+            {"filename": hit["filename"], "chunk_index": hit.get("chunk_index"),
+             "content": hit["content"][:2000]}
+            for hit in hits
+        ] + ([{"filename": "知识图谱", "content": graph_context[:4000]}] if graph_context else []),
     }
 
     if route == "direct":
@@ -1353,7 +1403,7 @@ def answer_question(question: str) -> dict:
     }
 
 
-def stream_answer(question: str):
+def stream_answer(question: str, prompt_question: str | None = None):
     """
     流式版本。
 
@@ -1367,29 +1417,11 @@ def stream_answer(question: str):
     - sources
     - content
     """
-    pipeline_result = run_retrieval_pipeline(question)
+    pipeline_result = yield from stream_retrieval_pipeline(question)
     route = pipeline_result["route"]
     route_reason = pipeline_result["route_reason"]
     hits = pipeline_result["hits"]
     graph_context = pipeline_result["graph_context"]
-
-    # 先把完整 Agent Trace 交给前端。
-    yield {
-        "type": "planner",
-        "data": pipeline_result["planner"],
-    }
-
-    for actor_item in pipeline_result["actor_trace"]:
-        yield {
-            "type": "actor",
-            "data": actor_item,
-        }
-
-    for reflection_item in pipeline_result["reflection_history"]:
-        yield {
-            "type": "reflector",
-            "data": reflection_item,
-        }
 
     yield {
         "type": "retrieval_info",
@@ -1411,7 +1443,8 @@ def stream_answer(question: str):
 
     if route == "direct":
         yield {"type": "sources", "data": []}
-        for delta in _direct_answer_stream(question):
+        yield {"type": "stage", "data": {"stage": "answer", "status": "running"}}
+        for delta in _direct_answer_stream(prompt_question or question):
             yield {"type": "content", "data": delta}
         return
 
@@ -1423,8 +1456,9 @@ def stream_answer(question: str):
         }
         return
 
-    user_prompt = _build_prompt(question, hits, graph_context)
+    user_prompt = _build_prompt(prompt_question or question, hits, graph_context)
     yield {"type": "sources", "data": _sources_from_hits(hits)}
+    yield {"type": "stage", "data": {"stage": "answer", "status": "running"}}
 
     stream = _llm_client.chat.completions.create(
         model=settings.llm_model_name,

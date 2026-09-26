@@ -1,0 +1,15 @@
+Router V5.1 Fresh Holdout-05 Manifest
+
+File: router_holdout_05_final.csv
+Rows: 80
+Schema: id,case_type,question,expected_route
+Route counts: DIRECT=20, VECTOR=20, GRAPH=20, HYBRID=20
+Shuffle seed: 20260922
+Encoding: UTF-8 with BOM
+SHA256: c9f37a851e51b111e1093576e1f2a26b29338f1217d5710f272efc6809116194
+
+Evaluation hygiene:
+- Generated only after Router V5.1 code was frozen and pushed.
+- Do not edit the CSV after freezing.
+- Run Router V5.1 on this set once for the independent result.
+- If errors are inspected and used for tuning, Holdout-05 becomes a regression/diagnostic set and a new untouched holdout is required.

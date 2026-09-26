@@ -2,7 +2,7 @@
 
 This test does not access Chroma, Neo4j or LLM API.
 Run from backend root:
-    python evaluation/test_agent_orchestrator.py
+    python -m evaluation.test_agent_orchestrator
 """
 
 from app.services.agent_orchestrator import (

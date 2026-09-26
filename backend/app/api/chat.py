@@ -6,12 +6,14 @@
 """
 
 import json
+import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services import session_service
+from app.services.memory_service import generation_context, resolve_question
 from app.services.rag_service import (
     answer_question,
     basic_answer_question,
@@ -21,6 +23,7 @@ from app.services.rag_service import (
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class ChatRequest(BaseModel):
@@ -54,7 +57,15 @@ class ChatResponse(BaseModel):
 
 class StreamChatRequest(BaseModel):
     session_id: str
-    question: str
+    question: str = Field(min_length=1, max_length=4000)
+
+
+def _validate_stream_request(request: StreamChatRequest) -> list[dict]:
+    if not request.question.strip():
+        raise HTTPException(status_code=422, detail="问题不能为空")
+    if not session_service.session_exists(request.session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return session_service.get_recent_turns(request.session_id)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -102,37 +113,36 @@ async def basic_chat(request: ChatRequest):
 @router.post("/chat/basic/stream")
 async def basic_chat_stream(request: StreamChatRequest):
     """Basic RAG 流式接口：Question -> Chroma -> LLM stream。"""
-    session_service.add_message(
-        request.session_id,
-        role="user",
-        content=request.question,
-    )
+    history = _validate_stream_request(request)
 
     def event_generator():
         full_answer = ""
         sources_data = []
 
-        for event in stream_basic_answer(request.question):
-            event_type = event.get("type")
-            event_data = event.get("data")
+        try:
+            yield _sse_format("stage", {"stage": "memory", "status": "running"})
+            resolved = resolve_question(request.question, history)
+            yield _sse_format("memory", {"resolved_question": resolved, "turns": len(history)})
+            prompt = generation_context(request.question, resolved, history)
+            for event in stream_basic_answer(resolved, prompt_question=prompt):
+                event_type = event["type"]
+                event_data = event["data"]
+                if event_type == "sources":
+                    sources_data = event_data or []
+                elif event_type == "content":
+                    full_answer += event_data or ""
+                yield _sse_format(event_type, event_data)
 
-            if event_type == "basic_info":
-                yield _sse_format("basic_info", event_data)
-            elif event_type == "sources":
-                sources_data = event_data or []
-                yield _sse_format("sources", sources_data)
-            elif event_type == "content":
-                text = event_data or ""
-                full_answer += text
-                yield _sse_format("content", text)
-
-        session_service.add_message(
-            request.session_id,
-            role="assistant",
-            content=full_answer,
-            sources=json.dumps(sources_data, ensure_ascii=False),
-        )
-        yield _sse_format("done", {"mode": "basic_rag"})
+            if not full_answer.strip():
+                raise RuntimeError("Basic RAG returned an empty answer")
+            session_service.add_exchange(
+                request.session_id, request.question, full_answer,
+                sources=json.dumps(sources_data, ensure_ascii=False),
+            )
+            yield _sse_format("done", {"mode": "basic_rag", "status": "ok"})
+        except Exception:
+            logger.exception("Basic RAG stream failed")
+            yield _sse_format("error", {"message": "回答生成失败，请稍后重试。"})
 
     return StreamingResponse(
         event_generator(),
@@ -140,6 +150,7 @@ async def basic_chat_stream(request: StreamChatRequest):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -157,11 +168,7 @@ async def chat_stream(request: StreamChatRequest):
     - sources
     - content
     """
-    session_service.add_message(
-        request.session_id,
-        role="user",
-        content=request.question,
-    )
+    history = _validate_stream_request(request)
 
     def event_generator():
         full_answer = ""
@@ -172,51 +179,44 @@ async def chat_stream(request: StreamChatRequest):
         actor_trace_data = []
         reflection_history_data = []
 
-        for event in stream_answer(request.question):
-            event_type = event.get("type")
-            event_data = event.get("data")
+        try:
+            yield _sse_format("stage", {"stage": "memory", "status": "running"})
+            resolved = resolve_question(request.question, history)
+            yield _sse_format("memory", {"resolved_question": resolved, "turns": len(history)})
+            prompt = generation_context(request.question, resolved, history)
+            for event in stream_answer(resolved, prompt_question=prompt):
+                event_type = event["type"]
+                event_data = event["data"]
+                if event_type == "planner":
+                    planner_data = event_data
+                elif event_type == "actor":
+                    actor_trace_data.append(event_data)
+                elif event_type == "reflector":
+                    reflection_history_data.append(event_data)
+                elif event_type == "retrieval_info":
+                    retrieval_info_data = event_data
+                elif event_type == "sources":
+                    sources_data = event_data or []
+                elif event_type == "content":
+                    full_answer += event_data or ""
+                yield _sse_format(event_type, event_data)
 
-            if event_type == "planner":
-                planner_data = event_data
-                yield _sse_format("planner", planner_data)
-
-            elif event_type == "actor":
-                actor_trace_data.append(event_data)
-                yield _sse_format("actor", event_data)
-
-            elif event_type == "reflector":
-                reflection_history_data.append(event_data)
-                yield _sse_format("reflector", event_data)
-
-            elif event_type == "retrieval_info":
-                retrieval_info_data = event_data
-                yield _sse_format("retrieval_info", retrieval_info_data)
-
-            elif event_type == "sources":
-                sources_data = event_data or []
-                yield _sse_format("sources", sources_data)
-
-            elif event_type == "content":
-                text = event_data or ""
-                full_answer += text
-                yield _sse_format("content", text)
-
-        session_service.add_message(
-            request.session_id,
-            role="assistant",
-            content=full_answer,
-            sources=json.dumps(sources_data, ensure_ascii=False),
-        )
-
-        yield _sse_format(
-            "done",
-            {
+            if not full_answer.strip():
+                raise RuntimeError("Agentic RAG returned an empty answer")
+            session_service.add_exchange(
+                request.session_id, request.question, full_answer,
+                sources=json.dumps(sources_data, ensure_ascii=False),
+            )
+            yield _sse_format("done", {
+                "status": "ok",
                 "retrieval_info": retrieval_info_data,
                 "planner": planner_data,
                 "actor_trace": actor_trace_data,
                 "reflection_history": reflection_history_data,
-            },
-        )
+            })
+        except Exception:
+            logger.exception("Agentic RAG stream failed")
+            yield _sse_format("error", {"message": "回答生成失败，请稍后重试。"})
 
     return StreamingResponse(
         event_generator(),
@@ -224,5 +224,6 @@ async def chat_stream(request: StreamChatRequest):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )

@@ -49,33 +49,40 @@ async function streamSse(url, body, onEvent, errorMessage) {
   })
 
   if (!res.ok || !res.body) {
-    throw new Error(errorMessage)
+    const detail = await res.json().catch(() => ({}))
+    throw new Error(detail.detail || errorMessage)
   }
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let completed = false
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
+      buffer = buffer.replace(/\r\n/g, '\n')
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() || ''
 
-    buffer += decoder.decode(value, { stream: true })
-    const parts = buffer.split('\n\n')
-    buffer = parts.pop() || ''
-
-    for (const part of parts) {
-      const line = part.trim()
-      if (!line.startsWith('data:')) continue
-
-      const jsonStr = line.slice(5).trim()
-      try {
-        onEvent(JSON.parse(jsonStr))
-      } catch (e) {
-        console.error('解析 SSE 数据失败', e, jsonStr)
+      for (const part of parts) {
+        const payload = part.split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n')
+        if (!payload) continue
+        const event = JSON.parse(payload)
+        onEvent(event)
+        if (event.type === 'error') throw new Error(event.data?.message || errorMessage)
+        if (event.type === 'done') completed = true
       }
+      if (done) break
     }
+  } finally {
+    reader.releaseLock()
   }
+  if (!completed) throw new Error('流式响应中断，请重试')
 }
 
 // 1) 基础知识库问答：一次 Chroma 检索 -> LLM。
