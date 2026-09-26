@@ -61,7 +61,7 @@ def add_triples(triples: list[dict], source_filename: str) -> int:
                 if c.isalnum() or c == "_"
             ) or "关联"
 
-            session.run(
+            result = session.run(
                 f"""
                 MERGE (a:Entity {{name: $subject}})
                 MERGE (b:Entity {{name: $object}})
@@ -89,6 +89,9 @@ def add_triples(triples: list[dict], source_filename: str) -> int:
                 object=obj,
                 source=source_filename,
             )
+            # Confirm that the implicit write transaction committed before
+            # reporting this relationship as written.
+            result.consume()
             written_count += 1
 
     return written_count
@@ -137,7 +140,7 @@ def delete_graph_by_source(source_filename: str) -> dict:
             remaining = list(dict.fromkeys(remaining))
 
             if remaining:
-                session.run(
+                result = session.run(
                     """
                     MATCH ()-[r]->()
                     WHERE elementId(r) = $relationship_id
@@ -148,9 +151,10 @@ def delete_graph_by_source(source_filename: str) -> dict:
                     sources=remaining,
                     primary_source=remaining[0],
                 )
+                result.consume()
                 updated_relations += 1
             else:
-                session.run(
+                result = session.run(
                     """
                     MATCH ()-[r]->()
                     WHERE elementId(r) = $relationship_id
@@ -158,6 +162,7 @@ def delete_graph_by_source(source_filename: str) -> dict:
                     """,
                     relationship_id=relationship_id,
                 )
+                result.consume()
                 deleted_relations += 1
 
         cleanup = session.run(
@@ -269,11 +274,7 @@ def match_entity_names(question: str, limit: int = 20) -> list[str]:
             matched.append(name)
 
     # 优先保留更具体、更长的实体；同时去重。
-    matched = sorted(
-        set(matched),
-        key=lambda value: len(value),
-        reverse=True,
-    )
+    matched = sorted(set(matched), key=lambda value: (-len(value), value.casefold()))
 
     return matched[:max(1, int(limit))]
 
@@ -310,10 +311,19 @@ def find_related_entities(
             """
             MATCH (a:Entity)-[r]->(b:Entity)
             WHERE a.name IN $names OR b.name IN $names
+            WITH a, r, b,
+                 (CASE WHEN a.name IN $names THEN 1 ELSE 0 END
+                  + CASE WHEN b.name IN $names THEN 1 ELSE 0 END) AS matched_count,
+                 (CASE WHEN a.name IN $names THEN size(a.name) ELSE 0 END
+                  + CASE WHEN b.name IN $names THEN size(b.name) ELSE 0 END) AS matched_length
             RETURN DISTINCT
                 a.name AS source,
                 type(r) AS relation,
-                b.name AS target
+                b.name AS target,
+                matched_count,
+                matched_length
+            ORDER BY matched_count DESC, matched_length DESC,
+                     source ASC, relation ASC, target ASC
             LIMIT $limit
             """,
             names=canonical_names,
