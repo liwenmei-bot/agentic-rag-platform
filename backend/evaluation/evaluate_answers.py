@@ -15,6 +15,7 @@ from pathlib import Path
 
 REFUSAL = re.compile(r"无法回答|无法确定|无法提供|没有检索到|未找到相关|资料不足|没有足够")
 CITATION = re.compile(r"【来源：([^】]+)】")
+TRIPLE = re.compile(r"^\s*(.*?)\s*-\[([^\]]+)\]->\s*(.*?)\s*$")
 
 
 def _json_field(value, default):
@@ -24,6 +25,29 @@ def _json_field(value, default):
         return json.loads(value or "")
     except (TypeError, ValueError):
         return default
+
+
+def _graph_relation_match(gold: dict, evidence: list) -> bool | None:
+    """Match the directed Gold triple against actual graph evidence, not source labels.
+
+    A missing Gold relation is unscorable. Keep the comparison literal so
+    differences between benchmark labels and stored edge types remain visible.
+    """
+    relation = (gold.get("gold_relation") or "").strip()
+    if gold.get("expected_route", "").lower() not in {"graph", "hybrid"} or not relation:
+        return None
+    parts = [part.strip().casefold() for part in relation.split("|")]
+    if len(parts) != 3 or not all(parts):
+        return None
+    target = tuple(parts)
+    for item in evidence if isinstance(evidence, list) else []:
+        if not isinstance(item, dict) or item.get("filename") != "知识图谱":
+            continue
+        for line in str(item.get("content") or "").splitlines():
+            match = TRIPLE.fullmatch(line)
+            if match and tuple(part.strip().casefold() for part in match.groups()) == target:
+                return True
+    return False
 
 
 def score_case(gold: dict, prediction: dict) -> dict:
@@ -47,11 +71,13 @@ def score_case(gold: dict, prediction: dict) -> dict:
             for source in expected_sources)
         if expected_sources else None
     )
+    graph_relation_match = _graph_relation_match(gold, evidence)
     return {
         "id": gold["id"],
         "route_match": str(prediction.get("route", "")).lower() == str(gold.get("expected_route", "")).lower(),
         "keyword_recall": (sum(word.casefold() in answer.casefold() for word in keywords) / len(keywords)) if keywords else None,
         "source_match": source_match,
+        "graph_relation_match": graph_relation_match,
         "citation_present": cited,
         "knowledge_required": knowledge_required,
         "refused": refused,
@@ -84,6 +110,8 @@ def summarize(rows: list[dict]) -> dict:
         "route_accuracy": _mean(rows, "route_match"),
         "keyword_recall_diagnostic": _mean(rows, "keyword_recall"),
         "source_match_rate": _mean(rows, "source_match"),
+        "graph_relation_scored_count": sum(r["graph_relation_match"] is not None and not r["error"] for r in rows),
+        "graph_relation_match_rate": _mean(rows, "graph_relation_match"),
         "citation_rate_on_knowledge": _mean(knowledge, "citation_present"),
         "false_citation_rate_on_direct": _mean(direct, "citation_present"),
         "unanswerable_refusal_rate": _mean(unanswerable, "refused"),
@@ -93,7 +121,12 @@ def summarize(rows: list[dict]) -> dict:
         "judge_count": len(judged),
         "judge_correctness": round(statistics.mean(j["correct"] for j in judged), 4) if judged else None,
         "judge_faithfulness": round(statistics.mean(faithful), 4) if faithful else None,
-        "note": "Keyword coverage is a diagnostic, not answer correctness. Judge scores require human spot checks.",
+        "note": (
+            "Graph relation matching compares directed Gold triples literally against graph evidence; "
+            "review benchmark edge names before interpreting mismatches. "
+            "Keyword coverage is a diagnostic, not answer correctness. "
+            "Judge scores require human spot checks."
+        ),
     }
 
 
